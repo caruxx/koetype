@@ -28,6 +28,11 @@ final class AppController: ObservableObject {
     /// A plain shortcut (trigger + another key) cancels it before anything appears.
     private var delayedIndicator: Task<Void, Never>?
     private static let indicatorDelay: UInt64 = 200_000_000
+    /// True once the recording indicator has been allowed on screen for the current recording.
+    private var recordingShown = false
+    private var message: String?
+    private var messageTask: Task<Void, Never>?
+    private var stage: IndicatorStage = .transcribing
 
     private init() {
         let dictionary = DictionaryStore(fileURL: AppPaths.dictionaryFile)
@@ -46,7 +51,7 @@ final class AppController: ObservableObject {
             transcriber: transcriber, polisher: polisher, deliverer: TextInserter(copyBox: copyBox),
             dictionary: dictionary, history: history,
             polishEnabled: { UserDefaults.standard.object(forKey: "polishEnabled") as? Bool ?? true },
-            onStatus: { status in Task { @MainActor in AppController.shared.handle(status) } })
+            onStatus: { status in DispatchQueue.main.async { AppController.shared.handle(status) } })
     }
 
     /// One line for the menu describing what the app is doing or what it needs.
@@ -62,7 +67,7 @@ final class AppController: ObservableObject {
         }
     }
 
-    var isReady: Bool { microphoneGranted && hotkeyActive && transcriber.state == .ready }
+    var isReady: Bool { microphoneGranted && hotkeyActive && transcriber.isReady }
 
     func start() {
         transcriber.objectWillChange
@@ -70,10 +75,10 @@ final class AppController: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observers)
         recorder.onLevel = { [weak self] level in self?.indicator.setLevel(level) }
-        recorder.onLimitReached = { [weak self] in
-            guard let self else { return }
-            self.machine.reset()
-            self.perform(.stopAndProcess)
+        recorder.onLimitReached = { [weak self] in self?.endRecordingWithoutKey() }
+        recorder.onInterrupted = { [weak self] in
+            self?.endRecordingWithoutKey()
+            self?.show(message: "マイクが切り替わったため、ここまでを入力します")
         }
         monitor.onInput = { [weak self] input, time in
             guard let self else { return }
@@ -108,38 +113,55 @@ final class AppController: ObservableObject {
     private func perform(_ action: HotkeyStateMachine.Action) {
         switch action {
         case .startRecording:
-            guard transcriber.state == .ready else { return refuse("モデルを準備中です") }
+            guard transcriber.isReady else { return refuse("モデルを準備中です") }
             guard Permissions.microphoneGranted else { return refuse("マイクの使用が許可されていません") }
             do {
                 try recorder.start()
+                recordingShown = false
                 showDelayed { [weak self] in
                     guard let self, self.recorder.isRecording else { return }
-                    self.indicator.set(.recording(handsFree: self.machine.isHandsFree))
+                    self.recordingShown = true
+                    self.refreshIndicator()
                 }
             } catch {
                 refuse("マイクを開始できませんでした")
             }
         case .enterHandsFree:
             delayedIndicator?.cancel()
-            if recorder.isRecording { indicator.set(.recording(handsFree: true)) }
+            recordingShown = recorder.isRecording
+            refreshIndicator()
         case .cancelRecording:
             delayedIndicator?.cancel()
             recorder.cancel()
-            showIdleOrProcessing()
+            refreshIndicator()
         case .stopAndProcess:
             delayedIndicator?.cancel()
-            guard recorder.isRecording else { return }
-            let (samples, seconds) = recorder.stop()
-            guard seconds >= 0.3 else { return showIdleOrProcessing() }
-            pending += 1
-            indicator.set(.processing)
-            pipeline.submit(samples: samples, durationSeconds: seconds)
+            submitRecording()
         }
     }
 
-    private func refuse(_ message: String) {
+    /// The recorder stopped on its own (time limit or device change): keep what was said.
+    private func endRecordingWithoutKey() {
+        guard recorder.isRecording else { return }
+        machine.recordingEndedByLimit(at: ProcessInfo.processInfo.systemUptime)
+        delayedIndicator?.cancel()
+        submitRecording()
+    }
+
+    private func submitRecording() {
+        guard recorder.isRecording else { return }
+        let (samples, seconds) = recorder.stop()
+        if seconds >= 0.3 {
+            pending += 1
+            stage = .transcribing
+            pipeline.submit(samples: samples, durationSeconds: seconds)
+        }
+        refreshIndicator()
+    }
+
+    private func refuse(_ text: String) {
         machine.reset()
-        showDelayed { [weak self] in self?.indicator.set(.message(message)) }
+        showDelayed { [weak self] in self?.show(message: text) }
     }
 
     private func showDelayed(_ show: @escaping @MainActor () -> Void) {
@@ -151,23 +173,46 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func showIdleOrProcessing() {
-        indicator.set(pending == 0 ? .hidden : .processing)
+    /// Keeps a message on screen for two seconds even while other recordings are being processed.
+    private func show(message text: String) {
+        message = text
+        messageTask?.cancel()
+        messageTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.message = nil
+            self?.refreshIndicator()
+        }
+        refreshIndicator()
+    }
+
+    private func refreshIndicator() {
+        let recording: RecordingState
+        if recorder.isRecording, recordingShown {
+            recording = machine.isHandsFree ? .handsFree : .holding
+        } else {
+            recording = .none
+        }
+        indicator.set(IndicatorPolicy.display(recording: recording, message: message, pending: pending, stage: stage))
     }
 
     private func handle(_ status: PipelineStatus) {
         switch status {
-        case .transcribing, .polishing:
-            if !recorder.isRecording { indicator.set(.processing) }
+        case .transcribing:
+            stage = .transcribing
+        case .polishing:
+            stage = .polishing
         case .delivered:
             pending = max(0, pending - 1)
-            if !recorder.isRecording { showIdleOrProcessing() }
         case .nothingHeard:
             pending = max(0, pending - 1)
-            if !recorder.isRecording { indicator.set(.message("聞き取れませんでした")) }
-        case .failed(let message):
+            show(message: "聞き取れませんでした")
+        case .failed(let text):
             pending = max(0, pending - 1)
-            if !recorder.isRecording { indicator.set(.message(message)) }
+            show(message: text)
+        case .warning(let text):
+            show(message: text)
         }
+        refreshIndicator()
     }
 }

@@ -157,4 +157,21 @@ final class DictationPipelineTests: XCTestCase {
         await first.value; await second.value
         XCTAssertEqual(deliverer.delivered, ["次の発話"])
     }
+
+    func testHistorySaveFailureIsReportedButTextIsStillDelivered() async throws {
+        let url = dir.appendingPathComponent("history.json")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("[]".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        history = HistoryStore(fileURL: url)
+        polishEnabled = false
+        transcriber.results = [.success("明日は休みです")]
+
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+
+        XCTAssertEqual(deliverer.delivered, ["明日は休みです"])
+        XCTAssertEqual(log.all, [.transcribing, .warning("履歴を保存できませんでした"),
+                                 .delivered(.inserted, polished: false)])
+    }
 }

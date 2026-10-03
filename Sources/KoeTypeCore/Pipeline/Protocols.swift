@@ -44,4 +44,6 @@ public enum PipelineStatus: Equatable, Sendable {
     case delivered(DeliveryOutcome, polished: Bool)
     case nothingHeard
     case failed(String)
+    /// Something went wrong that did not stop the text from being delivered.
+    case warning(String)
 }

@@ -8,4 +8,9 @@ if CommandLine.arguments.contains("--transcribe-file") {
     dispatchMain()
 }
 
+if CommandLine.arguments.contains("--preview-indicator") {
+    // Verification aid: shows the recording indicator with a synthetic voice level for a few seconds.
+    IndicatorPreview.run()
+}
+
 KoeTypeApp.main()
