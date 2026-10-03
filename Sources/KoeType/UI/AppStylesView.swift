@@ -22,7 +22,8 @@ struct AppStylesView: View {
             Text("文章を入力する先のアプリに合わせて、整え方を変えます。一覧にないアプリは「標準」です。")
                 .font(.caption).foregroundStyle(.secondary)
             List(rows, id: \.bundleID) { row in
-                HStack {
+                HStack(spacing: 10) {
+                    Self.icon(for: row.bundleID)
                     Text(Self.name(for: row.bundleID))
                     Spacer()
                     Picker("", selection: binding(for: row.bundleID)) {
@@ -34,7 +35,11 @@ struct AppStylesView: View {
             HStack {
                 Menu("実行中のアプリから追加") {
                     ForEach(runningApps, id: \.bundleID) { app in
-                        Button(app.name) { settings.appStyleOverrides[app.bundleID] = .standard }
+                        Button {
+                            settings.appStyleOverrides[app.bundleID] = .standard
+                        } label: {
+                            Label { Text(app.name) } icon: { Self.icon(for: app.bundleID) }
+                        }
                     }
                 }
                 .frame(width: 210)
@@ -62,6 +67,18 @@ struct AppStylesView: View {
                 return (bundleID: bundleID, name: app.localizedName ?? bundleID)
             }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// The app's own icon, so it can be recognised at a glance.
+    static func icon(for bundleID: String) -> some View {
+        Group {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable()
+            } else {
+                Image(systemName: "app.dashed").resizable().foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 22, height: 22)
     }
 
     /// The app's display name when it is installed, otherwise its identifier.
