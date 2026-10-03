@@ -11,7 +11,7 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
     }
 
     @MainActor private func deliverOnMain(_ text: String) async -> DeliveryResult {
-        let focus = FocusInspector.inspect()
+        let focus = await FocusInspector.inspect()
         let plan = InsertionDecision.plan(for: focus.snapshot)
         let outcome: DeliveryOutcome
         var verified: Bool?

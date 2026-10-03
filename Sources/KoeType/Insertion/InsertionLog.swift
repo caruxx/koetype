@@ -13,7 +13,8 @@ enum InsertionLog {
         let fields: [String]
         if let snapshot {
             fields = ["role=\(snapshot.role ?? "none")", "editable=\(snapshot.isEditable)",
-                      "range=\(snapshot.hasSelectedTextRange)", "readable=\(snapshot.valueLength != nil)"]
+                      "range=\(snapshot.hasSelectedTextRange)", "readable=\(snapshot.valueLength != nil)",
+                      "window=\(snapshot.appHasFocusedWindow)"]
         } else {
             fields = ["query=failed"]
         }

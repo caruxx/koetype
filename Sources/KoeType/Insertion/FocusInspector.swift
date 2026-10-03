@@ -11,7 +11,20 @@ enum FocusInspector {
     }
 
     /// Describes the focused element of the frontmost app.
-    static func inspect() -> Focus {
+    /// Apps built on web technology build their accessibility tree lazily, so an empty answer is
+    /// asked again a few times before it is believed.
+    static func inspect() async -> Focus {
+        var focus = inspectOnce()
+        var attempts = 0
+        while focus.element == nil, focus.snapshot?.role == nil, attempts < 3 {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            focus = inspectOnce()
+            attempts += 1
+        }
+        return focus
+    }
+
+    private static func inspectOnce() -> Focus {
         guard let app = NSWorkspace.shared.frontmostApplication else { return Focus() }
         let appName = app.localizedName
         guard Permissions.accessibilityGranted,
@@ -25,7 +38,18 @@ enum FocusInspector {
         AXUIElementSetMessagingTimeout(application, 0.25)
 
         var focused: CFTypeRef?
-        switch AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused) {
+        var result = AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused)
+        if result != .success {
+            // The system-wide element sometimes knows the focus when the app element does not.
+            let systemWide = AXUIElementCreateSystemWide()
+            AXUIElementSetMessagingTimeout(systemWide, 0.25)
+            var viaSystem: CFTypeRef?
+            if AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &viaSystem) == .success {
+                focused = viaSystem
+                result = .success
+            }
+        }
+        switch result {
         case .success:
             guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
                 return Focus(snapshot: nil, appName: appName, element: nil)
@@ -39,10 +63,14 @@ enum FocusInspector {
             let snapshot = FocusSnapshot(
                 role: role as? String, hasSelectedTextRange: hasRange,
                 isEditable: isSettable(element, kAXValueAttribute) || isSettable(element, kAXSelectedTextRangeAttribute),
-                valueLength: length(of: element))
+                valueLength: length(of: element), appHasFocusedWindow: true)
             return Focus(snapshot: snapshot, appName: appName, element: element)
         case .noValue:
-            return Focus(snapshot: FocusSnapshot(role: nil, hasSelectedTextRange: false), appName: appName, element: nil)
+            var window: CFTypeRef?
+            let hasWindow = AXUIElementCopyAttributeValue(
+                application, kAXFocusedWindowAttribute as CFString, &window) == .success
+            return Focus(snapshot: FocusSnapshot(role: nil, hasSelectedTextRange: false, appHasFocusedWindow: hasWindow),
+                         appName: appName, element: nil)
         default:
             return Focus(snapshot: nil, appName: appName, element: nil)
         }
