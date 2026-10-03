@@ -29,6 +29,11 @@ public enum HallucinationFilter {
     /// Joins decoded segments, leaving out any that begin after the real audio ended.
     /// Silence is appended before decoding, and Whisper sometimes invents a phrase for it.
     public static func join(_ segments: [SpeechSegment], speechEnd: Double) -> String {
+        spoken(segments, speechEnd: speechEnd).map(\.text).joined()
+    }
+
+    /// The segments that belong to real speech, without those invented for the appended silence.
+    public static func spoken(_ segments: [SpeechSegment], speechEnd: Double) -> [SpeechSegment] {
         segments.enumerated()
             .filter { index, segment in
                 if index == 0 { return true }
@@ -37,8 +42,7 @@ public enum HallucinationFilter {
                 let squeezed = segment.start >= speechEnd - tailWindow
                 return !(squeezed && tailPhantoms.contains(core(of: segment.text)))
             }
-            .map { $0.element.text }
-            .joined()
+            .map { $0.element }
     }
 }
 

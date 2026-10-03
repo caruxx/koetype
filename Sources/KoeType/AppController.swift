@@ -15,6 +15,8 @@ final class AppController: ObservableObject {
     let usage: UsageStore
     /// The polisher currently selected in settings (OpenAI API or Codex CLI).
     let activePolisher: Polishing
+    /// Long recordings of the Mac's sound and the microphone, separate from dictation.
+    let recording: RecordingSession
     @Published private(set) var hotkeyActive = false
     @Published private(set) var microphoneGranted = Permissions.microphoneGranted
 
@@ -56,6 +58,7 @@ final class AppController: ObservableObject {
                 runner: ProcessRunner()),
             usesCodex: { UserDefaults.standard.bool(forKey: "polishViaCodex") })
         self.activePolisher = activePolisher
+        recording = RecordingSession(transcriber: transcriber, dictionary: dictionary)
         self.dictionary = dictionary
         self.history = history
         self.transcriber = transcriber
@@ -89,6 +92,10 @@ final class AppController: ObservableObject {
 
     func start() {
         transcriber.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &observers)
+        recording.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observers)

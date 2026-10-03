@@ -5,7 +5,8 @@ enum AudioRecorderError: Error { case noInputDevice, engineFailed(Error) }
 
 final class AudioRecorder {
     static let sampleRate: Double = 16_000
-    static let maxSeconds: Double = 600
+    /// Recording stops by itself after this long. Dictation uses the default; long recordings raise it.
+    var maxSeconds: Double = 600
 
     var onLevel: ((Float) -> Void)?
     var onLimitReached: (() -> Void)?
@@ -98,7 +99,7 @@ final class AudioRecorder {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.onLevel?(LevelMeter.display(rms: rms))
-            if !self.limitFired, Double(total) / Self.sampleRate >= Self.maxSeconds {
+            if !self.limitFired, Double(total) / Self.sampleRate >= self.maxSeconds {
                 self.limitFired = true
                 self.onLimitReached?()
             }

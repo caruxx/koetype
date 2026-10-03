@@ -35,6 +35,15 @@ final class WindowManager {
     func showHistory() {
         show(id: "history", title: "履歴", size: NSSize(width: 640, height: 480)) { HistoryView() }
     }
+    /// Each transcript replaces the previous one in the same window.
+    func showTranscript(text: String, file: URL?) {
+        windows["transcript"]?.close()
+        windows["transcript"] = nil
+        show(id: "transcript", title: "文字起こし", size: NSSize(width: 640, height: 520)) {
+            TranscriptView(text: text, file: file)
+        }
+    }
+
     func showOnboarding() {
         show(id: "onboarding", title: "KoeType へようこそ", size: NSSize(width: 460, height: 300)) { OnboardingView() }
     }
