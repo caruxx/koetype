@@ -80,7 +80,7 @@ Typeless / Wispr Flow と同じ使い心地の音声入力アプリを、利用�
 ### 5.1 HotkeyMonitor
 
 - `CGEventTap` で修飾キーの押下・解放を監視する
-- 既定キーは右 Option。設定で右 Command / Fn / 右 Control に変更可
+- 既定キーは右 Command（JIS 配列の MacBook には右 Option がないため）。設定で右 Option / Fn / 右 Control に変更可
 - 押している間だけ録音（プッシュトゥトーク）
 - 0.4 秒以内に 2 回押すとハンズフリー開始、もう一度押すと終了
 - 録音中に Esc で破棄
