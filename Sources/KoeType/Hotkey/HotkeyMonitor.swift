@@ -5,7 +5,7 @@ final class HotkeyMonitor {
     var onInput: ((HotkeyStateMachine.Input, TimeInterval) -> Void)?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
-    private var choice: HotkeyChoice = .rightOption
+    private var choice: HotkeyChoice = .rightCommand
     private var triggerIsDown = false
 
     func start(choice: HotkeyChoice) -> Bool {

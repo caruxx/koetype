@@ -58,7 +58,7 @@ final class AppSettings: ObservableObject {
     @Published var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: "launchAtLogin") } }
 
     private init() {
-        hotkey = defaults.string(forKey: "hotkey").flatMap(HotkeyChoice.init(rawValue:)) ?? .rightOption
+        hotkey = defaults.string(forKey: "hotkey").flatMap(HotkeyChoice.init(rawValue:)) ?? .rightCommand
         whisperModel = defaults.string(forKey: "whisperModel") ?? Self.defaultWhisperModel
         polishEnabled = defaults.object(forKey: "polishEnabled") as? Bool ?? true
         polishModel = defaults.string(forKey: "polishModel") ?? Self.defaultPolishModel
