@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var loginMessage = ""
     @State private var accessibilityGranted = Permissions.accessibilityGranted
     @State private var showAdvanced = false
+    @State private var inputDevices = AudioDevices.inputs().map(\.device)
     @State private var monthlyUsage = AppController.shared.usage.month(containing: Date())
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -27,6 +28,13 @@ struct SettingsView: View {
                     ForEach(HotkeyChoice.allCases) { Text($0.label).tag($0) }
                 }
                 .onChange(of: settings.hotkey) { controller.reloadHotkey() }
+                Picker("マイク", selection: $settings.microphone) {
+                    Text("システムの設定に従う").tag(MicrophonePreference.systemDefault)
+                    Text("Mac 本体のマイク").tag(MicrophonePreference.builtIn)
+                    ForEach(inputDevices.filter { !$0.isBuiltIn }) { device in
+                        Text(device.name).tag(MicrophonePreference.device(uid: device.uid))
+                    }
+                }
             } footer: {
                 Text("押している間だけ録音。素早く 2 回押すとハンズフリー、Esc で取り消し。")
                     .footnoteStyle()
@@ -103,6 +111,7 @@ struct SettingsView: View {
                             .labelsHidden().frame(width: 170)
                         }
                     }
+                    Button("マイクを聞き比べる…") { WindowManager.shared.showMicrophoneComparison() }
                     TextField("Codex のモデル", text: $settings.codexModel)
                     TextField("音声認識モデル", text: $whisperModelDraft)
                     HStack {
@@ -127,6 +136,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 380)
         .onReceive(timer) { _ in
+            inputDevices = AudioDevices.inputs().map(\.device)
             accessibilityGranted = Permissions.accessibilityGranted
             controller.refreshPermissions()
         }

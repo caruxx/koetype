@@ -1,4 +1,6 @@
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import KoeTypeCore
 
 enum AudioRecorderError: Error { case noInputDevice, engineFailed(Error) }
@@ -10,6 +12,8 @@ final class AudioRecorder {
 
     var onLevel: ((Float) -> Void)?
     var onLimitReached: (() -> Void)?
+    /// Which microphone to use; read at every `start()` so a change in settings applies at once.
+    var preference: () -> MicrophonePreference = { .systemDefault }
     /// The input device changed or disappeared while recording. Called on the main queue.
     var onInterrupted: (() -> Void)?
     private var configurationObserver: NSObjectProtocol?
@@ -26,6 +30,11 @@ final class AudioRecorder {
         // A fresh engine per recording picks up device changes (AirPods connect, mic unplugged).
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        // Point the engine at the chosen microphone before asking for its format.
+        if var deviceID = AudioDevices.deviceID(for: preference()), let unit = input.audioUnit {
+            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                 &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioRecorderError.noInputDevice

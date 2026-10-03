@@ -69,6 +69,7 @@ final class AppSettings: ObservableObject {
     private let defaults = UserDefaults.standard
 
     @Published var hotkey: HotkeyChoice { didSet { defaults.set(hotkey.rawValue, forKey: "hotkey") } }
+    @Published var microphone: MicrophonePreference { didSet { defaults.set(microphone.stored, forKey: "microphone") } }
     @Published var whisperModel: String { didSet { defaults.set(whisperModel, forKey: "whisperModel") } }
     @Published var polishEnabled: Bool { didSet { defaults.set(polishEnabled, forKey: "polishEnabled") } }
     @Published var polishModel: String { didSet { defaults.set(polishModel, forKey: "polishModel") } }
@@ -87,6 +88,7 @@ final class AppSettings: ObservableObject {
 
     private init() {
         hotkey = defaults.string(forKey: "hotkey").flatMap(HotkeyChoice.init(rawValue:)) ?? .rightCommand
+        microphone = MicrophonePreference(stored: defaults.string(forKey: "microphone"))
         whisperModel = defaults.string(forKey: "whisperModel") ?? Self.defaultWhisperModel
         // Local processing is the default; AI polishing is an opt-in for higher accuracy.
         polishEnabled = defaults.object(forKey: "polishEnabled") as? Bool ?? false

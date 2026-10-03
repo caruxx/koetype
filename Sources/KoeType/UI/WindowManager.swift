@@ -48,6 +48,10 @@ final class WindowManager {
         show(id: "appStyles", title: "アプリ別の文体", size: NSSize(width: 500, height: 460)) { AppStylesView() }
     }
 
+    func showMicrophoneComparison() {
+        show(id: "micCompare", title: "マイクの聞き比べ", size: NSSize(width: 560, height: 420)) { MicrophoneComparisonView() }
+    }
+
     func showOnboarding() {
         show(id: "onboarding", title: "KoeType へようこそ", size: NSSize(width: 460, height: 300)) { OnboardingView() }
     }

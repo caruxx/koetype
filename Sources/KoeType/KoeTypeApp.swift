@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppController.shared.start()
         if CommandLine.arguments.contains("--open-settings") { WindowManager.shared.showSettings() }
         if CommandLine.arguments.contains("--open-app-styles") { WindowManager.shared.showAppStyles() }
+        if CommandLine.arguments.contains("--open-mic-compare") { WindowManager.shared.showMicrophoneComparison() }
     }
 }
 
