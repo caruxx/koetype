@@ -25,15 +25,17 @@ enum KeychainStore {
 
     /// Saving an empty string deletes the stored key.
     static func saveAPIKey(_ key: String) throws {
-        let deleteStatus = SecItemDelete(baseQuery as CFDictionary)
-        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
-            throw KeychainError.status(deleteStatus)
-        }
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        var query = baseQuery
-        query[kSecValueData as String] = Data(trimmed.utf8)
-        let status = SecItemAdd(query as CFDictionary, nil)
+        guard !trimmed.isEmpty else {
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.status(status) }
+            return
+        }
+        let value = [kSecValueData as String: Data(trimmed.utf8)]
+        var status = SecItemUpdate(baseQuery as CFDictionary, value as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(baseQuery.merging(value) { $1 } as CFDictionary, nil)
+        }
         guard status == errSecSuccess else { throw KeychainError.status(status) }
     }
 }

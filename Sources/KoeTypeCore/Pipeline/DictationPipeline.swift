@@ -73,9 +73,11 @@ public actor DictationPipeline {
         }
 
         let delivery = await deliverer.deliver(finalText)
-        try? history.append(HistoryItem(date: now(), rawText: raw, finalText: finalText,
-                                        appName: delivery.appName, outcome: delivery.outcome,
-                                        polished: polished, durationSeconds: durationSeconds))
+        let item = HistoryItem(date: now(), rawText: raw, finalText: finalText,
+                               appName: delivery.appName, outcome: delivery.outcome,
+                               polished: polished, durationSeconds: durationSeconds)
+        // The text has already reached the user; a failed save must not undo or hide that.
+        if (try? history.append(item)) == nil { onStatus(.warning("履歴を保存できませんでした")) }
         onStatus(.delivered(delivery.outcome, polished: polished))
     }
 }

@@ -27,9 +27,17 @@ public enum PolishPrompt {
     }
 
     public static func user(raw: String) -> String {
-        let safe = raw
-            .replacingOccurrences(of: "</transcript>", with: "")
-            .replacingOccurrences(of: "<transcript>", with: "")
-        return "<transcript>\n\(safe)\n</transcript>"
+        "<transcript>\n\(stripTags(raw))\n</transcript>"
+    }
+
+    /// Removes every form of the wrapper tag, repeating until none can be reassembled from the pieces.
+    static func stripTags(_ text: String) -> String {
+        var current = text
+        while true {
+            let next = current.replacingOccurrences(
+                of: "<\\s*/?\\s*transcript\\s*>", with: "", options: [.regularExpression, .caseInsensitive])
+            if next == current { return current }
+            current = next
+        }
     }
 }

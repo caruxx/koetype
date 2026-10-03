@@ -81,4 +81,35 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(machine.isRecording)
         XCTAssertEqual(machine.handle(.triggerDown, at: 1), [.startRecording])
     }
+
+    func testPressRightAfterTheLimitEndedHandsFreeIsSwallowed() {
+        var machine = HotkeyStateMachine()
+        _ = machine.handle(.triggerDown, at: 0)
+        _ = machine.handle(.triggerUp, at: 0.1)
+        _ = machine.handle(.triggerDown, at: 0.2)
+        _ = machine.handle(.triggerUp, at: 0.3)
+        machine.recordingEndedByLimit(at: 600)
+        XCTAssertFalse(machine.isRecording)
+        // The user does not know it stopped and presses to end it.
+        XCTAssertEqual(machine.handle(.triggerDown, at: 605), [])
+        XCTAssertEqual(machine.handle(.triggerUp, at: 605.1), [])
+        XCTAssertEqual(machine.handle(.triggerDown, at: 610), [.startRecording])
+    }
+
+    func testLongAfterTheLimitAPressRecordsNormally() {
+        var machine = HotkeyStateMachine()
+        _ = machine.handle(.triggerDown, at: 0)
+        _ = machine.handle(.triggerUp, at: 0.1)
+        _ = machine.handle(.triggerDown, at: 0.2)
+        machine.recordingEndedByLimit(at: 600)
+        XCTAssertEqual(machine.handle(.triggerDown, at: 700), [.startRecording])
+    }
+
+    func testLimitWhileHoldingIgnoresTheRelease() {
+        var machine = HotkeyStateMachine()
+        _ = machine.handle(.triggerDown, at: 0)
+        machine.recordingEndedByLimit(at: 600)
+        XCTAssertEqual(machine.handle(.triggerUp, at: 601), [])
+        XCTAssertEqual(machine.handle(.triggerDown, at: 602), [.startRecording])
+    }
 }

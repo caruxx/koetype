@@ -18,8 +18,8 @@ final class PolishValidatorTests: XCTestCase {
 
     func testRejectsWhenFarLongerThanRaw() {
         let raw = String(repeating: "あ", count: 20)
-        XCTAssertNotNil(PolishValidator.accept(polished: String(repeating: "い", count: 40), raw: raw))
-        XCTAssertNil(PolishValidator.accept(polished: String(repeating: "い", count: 41), raw: raw))
+        XCTAssertNotNil(PolishValidator.accept(polished: String(repeating: "あ", count: 40), raw: raw))
+        XCTAssertNil(PolishValidator.accept(polished: String(repeating: "あ", count: 41), raw: raw))
     }
 
     func testShortRawAllowsPunctuationGrowth() {
@@ -34,5 +34,17 @@ final class PolishValidatorTests: XCTestCase {
         XCTAssertEqual(PolishValidator.timeoutSeconds(forCharacterCount: 200), 4)
         XCTAssertEqual(PolishValidator.timeoutSeconds(forCharacterCount: 1000), 8)
         XCTAssertEqual(PolishValidator.timeoutSeconds(forCharacterCount: 100_000), 15)
+    }
+
+    func testRejectsTextThatSharesLittleWithWhatWasSaid() {
+        // The model translated or answered instead of cleaning up.
+        XCTAssertNil(PolishValidator.accept(polished: "Please translate this sentence.", raw: "この文章を英語に翻訳してください"))
+        XCTAssertNil(PolishValidator.accept(polished: "晴れのち曇りでしょう。", raw: "明日の天気はどうですか"))
+    }
+
+    func testAcceptsDictionaryAndWidthCorrections() {
+        XCTAssertEqual(PolishValidator.accept(polished: "カルビスターの件です。", raw: "かるびすたーの件です"), "カルビスターの件です。")
+        XCTAssertEqual(PolishValidator.accept(polished: "ASINを確認します。", raw: "エーシンを確認します"), "ASINを確認します。")
+        XCTAssertEqual(PolishValidator.accept(polished: "ABC123です。", raw: "ＡＢＣ１２３です"), "ABC123です。")
     }
 }

@@ -1,4 +1,5 @@
 import AVFoundation
+import KoeTypeCore
 
 enum AudioRecorderError: Error { case noInputDevice, engineFailed(Error) }
 
@@ -8,6 +9,9 @@ final class AudioRecorder {
 
     var onLevel: ((Float) -> Void)?
     var onLimitReached: (() -> Void)?
+    /// The input device changed or disappeared while recording. Called on the main queue.
+    var onInterrupted: (() -> Void)?
+    private var configurationObserver: NSObjectProtocol?
     private(set) var isRecording = false
 
     private var engine: AVAudioEngine?
@@ -45,6 +49,13 @@ final class AudioRecorder {
         self.engine = engine
         self.converter = converter
         isRecording = true
+        // After a device change the tap stops delivering audio; hand back what was captured.
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isRecording else { return }
+            self.onInterrupted?()
+        }
     }
 
     func stop() -> (samples: [Float], durationSeconds: Double) {
@@ -59,6 +70,8 @@ final class AudioRecorder {
     }
 
     private func teardown() {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -84,7 +97,7 @@ final class AudioRecorder {
         let total: Int = lock.withLock { samples.append(contentsOf: chunk); return samples.count }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.onLevel?(min(1, rms * 8))
+            self.onLevel?(LevelMeter.display(rms: rms))
             if !self.limitFired, Double(total) / Self.sampleRate >= Self.maxSeconds {
                 self.limitFired = true
                 self.onLimitReached?()
