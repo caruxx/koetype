@@ -104,6 +104,7 @@ final class AppController: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observers)
+        recorder.preference = { MicrophonePreference(stored: UserDefaults.standard.string(forKey: "microphone")) }
         recorder.onLevel = { [weak self] level in self?.indicator.setLevel(level) }
         recorder.onLimitReached = { [weak self] in self?.endRecordingWithoutKey() }
         recorder.onInterrupted = { [weak self] in
