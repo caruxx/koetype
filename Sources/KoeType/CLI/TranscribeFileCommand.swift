@@ -37,6 +37,7 @@ enum TranscribeFileCommand {
         print(String(format: "transcribe_seconds=%.2f", Date().timeIntervalSince(started)))
         let raw = HallucinationFilter.clean(transcript)
         print("raw=\(raw)")
+        print("local=\(LocalCleanup.clean(raw))")
 
         if arguments.contains("--polish"), !raw.isEmpty {
             let polishModel = UserDefaults.standard.string(forKey: "polishModel") ?? AppSettings.defaultPolishModel

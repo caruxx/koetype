@@ -5,30 +5,48 @@ public final class OpenAIPolisher: Polishing, @unchecked Sendable {
     private let model: @Sendable () -> String
     private let transport: HTTPTransport
     private let timeout: @Sendable (Int) -> Double
+    private let onUsage: @Sendable (PolishUsage) -> Void
 
     public init(apiKey: @escaping @Sendable () -> String?,
                 model: @escaping @Sendable () -> String,
                 transport: HTTPTransport = URLSessionTransport(),
-                timeout: @escaping @Sendable (Int) -> Double = PolishValidator.timeoutSeconds(forCharacterCount:)) {
+                timeout: @escaping @Sendable (Int) -> Double = PolishValidator.timeoutSeconds(forCharacterCount:),
+                onUsage: @escaping @Sendable (PolishUsage) -> Void = { _ in }) {
         self.apiKey = apiKey; self.model = model; self.transport = transport; self.timeout = timeout
+        self.onUsage = onUsage
     }
 
     public func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
         var request = try authorized(URL(string: "https://api.openai.com/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "model": model(),
             "messages": [
                 ["role": "system", "content": PolishPrompt.system(dictionary: dictionary)],
                 ["role": "user", "content": PolishPrompt.user(raw: raw)],
             ],
-        ])
-        let data = try await send(request, timeout: timeout(raw.count))
+            // Cleanup needs no deliberation; reasoning tokens would only add cost and delay.
+            "reasoning_effort": "none",
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let data: Data
+        do {
+            data = try await send(request, timeout: timeout(raw.count))
+        } catch PolishError.http(status: 400) {
+            // Models without reasoning reject the parameter; ask again without it.
+            body["reasoning_effort"] = nil
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            data = try await send(request, timeout: timeout(raw.count))
+        }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
               let content = message["content"] as? String else { throw PolishError.badResponse }
+        if let usage = json["usage"] as? [String: Any],
+           let input = usage["prompt_tokens"] as? Int, let output = usage["completion_tokens"] as? Int {
+            onUsage(PolishUsage(inputTokens: input, outputTokens: output))
+        }
         return content
     }
 

@@ -12,6 +12,7 @@ final class AppController: ObservableObject {
     let history: HistoryStore
     let transcriber: WhisperKitTranscriber
     let polisher: OpenAIPolisher
+    let usage: UsageStore
     @Published private(set) var hotkeyActive = false
     @Published private(set) var microphoneGranted = Permissions.microphoneGranted
 
@@ -39,9 +40,12 @@ final class AppController: ObservableObject {
         let history = HistoryStore(fileURL: AppPaths.historyFile)
         let transcriber = WhisperKitTranscriber()
         let copyBox = CopyBoxPanel()
+        let usage = UsageStore(fileURL: AppPaths.usageFile)
         let polisher = OpenAIPolisher(
             apiKey: { KeychainStore.readAPIKey() },
-            model: { UserDefaults.standard.string(forKey: "polishModel") ?? AppSettings.defaultPolishModel })
+            model: { UserDefaults.standard.string(forKey: "polishModel") ?? AppSettings.defaultPolishModel },
+            onUsage: { try? usage.record($0, at: Date()) })
+        self.usage = usage
         self.dictionary = dictionary
         self.history = history
         self.transcriber = transcriber
@@ -50,7 +54,11 @@ final class AppController: ObservableObject {
         pipeline = DictationPipeline(
             transcriber: transcriber, polisher: polisher, deliverer: TextInserter(copyBox: copyBox),
             dictionary: dictionary, history: history,
-            polishEnabled: { UserDefaults.standard.object(forKey: "polishEnabled") as? Bool ?? true },
+            polishEnabled: { UserDefaults.standard.object(forKey: "polishEnabled") as? Bool ?? false },
+            minimumAICharacters: {
+                UserDefaults.standard.object(forKey: "minimumAICharacters") as? Int
+                    ?? AppSettings.defaultMinimumAICharacters
+            },
             onStatus: { status in DispatchQueue.main.async { AppController.shared.handle(status) } })
     }
 

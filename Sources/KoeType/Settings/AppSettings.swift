@@ -8,6 +8,7 @@ enum AppPaths {
     }
     static var historyFile: URL { supportDirectory.appendingPathComponent("history.json") }
     static var dictionaryFile: URL { supportDirectory.appendingPathComponent("dictionary.json") }
+    static var usageFile: URL { supportDirectory.appendingPathComponent("usage.json") }
     static var modelsDirectory: URL { supportDirectory.appendingPathComponent("Models", isDirectory: true) }
 }
 
@@ -48,7 +49,13 @@ enum HotkeyChoice: String, CaseIterable, Identifiable {
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
     static let defaultWhisperModel = "openai_whisper-large-v3-v20240930_turbo_632MB"
-    static let defaultPolishModel = "gpt-4.1-mini"
+    /// OpenAI's most economical model; confirmed against the official model page on 2026-10-03.
+    static let defaultPolishModel = "gpt-6-luna"
+    static let defaultMinimumAICharacters = 20
+    /// Published list price of the default model, used only for the cost estimate shown in settings.
+    static let estimateInputDollarsPerMillion = 0.10
+    static let estimateOutputDollarsPerMillion = 0.50
+    static let estimateYenPerDollar = 150.0
 
     private let defaults = UserDefaults.standard
 
@@ -56,12 +63,18 @@ final class AppSettings: ObservableObject {
     @Published var whisperModel: String { didSet { defaults.set(whisperModel, forKey: "whisperModel") } }
     @Published var polishEnabled: Bool { didSet { defaults.set(polishEnabled, forKey: "polishEnabled") } }
     @Published var polishModel: String { didSet { defaults.set(polishModel, forKey: "polishModel") } }
+    /// Utterances shorter than this are finished locally even when AI polishing is on.
+    @Published var minimumAICharacters: Int {
+        didSet { defaults.set(minimumAICharacters, forKey: "minimumAICharacters") }
+    }
     @Published var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: "launchAtLogin") } }
 
     private init() {
         hotkey = defaults.string(forKey: "hotkey").flatMap(HotkeyChoice.init(rawValue:)) ?? .rightCommand
         whisperModel = defaults.string(forKey: "whisperModel") ?? Self.defaultWhisperModel
-        polishEnabled = defaults.object(forKey: "polishEnabled") as? Bool ?? true
+        // Local processing is the default; AI polishing is an opt-in for higher accuracy.
+        polishEnabled = defaults.object(forKey: "polishEnabled") as? Bool ?? false
+        minimumAICharacters = defaults.object(forKey: "minimumAICharacters") as? Int ?? Self.defaultMinimumAICharacters
         polishModel = defaults.string(forKey: "polishModel") ?? Self.defaultPolishModel
         launchAtLogin = defaults.bool(forKey: "launchAtLogin")
     }

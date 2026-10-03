@@ -64,6 +64,6 @@ struct HistoryView: View {
         case .copyBox: outcome = "コピーボックス"
         case .insertedAndCopyBox: outcome = "挿入 + コピーボックス"
         }
-        return item.polished ? outcome : outcome + "・整形なし"
+        return outcome + (item.polished ? "・AI 整形" : "・ローカル処理")
     }
 }

@@ -53,22 +53,25 @@ final class DictationPipelineTests: XCTestCase {
     private var history: HistoryStore!
     private var log: StatusLog!
     private var polishEnabled = true
+    private var minimumAICharacters = 0
 
     override func setUp() {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         transcriber = FakeTranscriber(); polisher = FakePolisher(); deliverer = FakeDeliverer()
         dictionary = DictionaryStore(fileURL: dir.appendingPathComponent("dictionary.json"))
         history = HistoryStore(fileURL: dir.appendingPathComponent("history.json"))
-        log = StatusLog(); polishEnabled = true
+        log = StatusLog(); polishEnabled = true; minimumAICharacters = 0
     }
     override func tearDown() { try? FileManager.default.removeItem(at: dir) }
 
     private func makePipeline() -> DictationPipeline {
         let enabled = polishEnabled
+        let minimum = minimumAICharacters
         let log = self.log!
         return DictationPipeline(transcriber: transcriber, polisher: polisher, deliverer: deliverer,
                                  dictionary: dictionary, history: history,
                                  polishEnabled: { enabled },
+                                 minimumAICharacters: { minimum },
                                  now: { Date(timeIntervalSince1970: 100) },
                                  onStatus: { log.add($0) })
     }
@@ -173,5 +176,45 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(deliverer.delivered, ["明日は休みです"])
         XCTAssertEqual(log.all, [.transcribing, .warning("履歴を保存できませんでした"),
                                  .delivered(.inserted, polished: false)])
+    }
+
+    func testShortUtteranceIsFinishedLocallyWithoutAI() async {
+        minimumAICharacters = 20
+        transcriber.results = [.success("えーと、了解です。")]
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(polisher.calls, 0)
+        XCTAssertEqual(deliverer.delivered, ["了解です。"])
+        XCTAssertEqual(history.items.first?.rawText, "えーと、了解です。")
+        XCTAssertEqual(history.items.first?.polished, false)
+        XCTAssertEqual(log.all, [.transcribing, .delivered(.inserted, polished: false)])
+    }
+
+    func testLongUtteranceGoesToAIWhenEnabled() async {
+        minimumAICharacters = 20
+        transcriber.results = [.success("来週の火曜日の午後3時から打ち合わせをお願いします")]
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(polisher.calls, 1)
+        XCTAssertEqual(deliverer.delivered, ["来週の火曜日の午後3時から打ち合わせをお願いします。"])
+    }
+
+    func testAIFailureFallsBackToTheLocallyCleanedText() async {
+        transcriber.results = [.success("えーと、来週の火曜日の午後3時から打ち合わせをお願いします。")]
+        polisher.handler = { _ in throw PolishError.timeout }
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered, ["来週の火曜日の午後3時から打ち合わせをお願いします。"])
+    }
+
+    func testAIDisabledStillRemovesFillersLocally() async {
+        polishEnabled = false
+        transcriber.results = [.success("あのー、明日は休みです。")]
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered, ["明日は休みです。"])
+    }
+
+    func testOnlyFillersDeliversNothing() async {
+        transcriber.results = [.success("えーと。")]
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertTrue(deliverer.delivered.isEmpty)
+        XCTAssertEqual(log.all, [.transcribing, .nothingHeard])
     }
 }

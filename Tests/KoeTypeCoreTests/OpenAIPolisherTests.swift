@@ -3,6 +3,8 @@ import XCTest
 
 private final class StubTransport: HTTPTransport, @unchecked Sendable {
     var status = 200
+    /// Statuses returned for the first requests, before `status` applies.
+    var statusQueue: [Int] = []
     var body = Data()
     var delay: Double = 0
     private(set) var requests: [URLRequest] = []
@@ -10,7 +12,8 @@ private final class StubTransport: HTTPTransport, @unchecked Sendable {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         requests.append(request)
         if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        let code = statusQueue.isEmpty ? status : statusQueue.removeFirst()
+        let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: nil)!
         return (body, response)
     }
 }
@@ -35,6 +38,7 @@ final class OpenAIPolisherTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
         XCTAssertEqual(json["model"] as? String, "model-x")
         XCTAssertNil(json["temperature"])   // newer models reject non-default temperature
+        XCTAssertEqual(json["reasoning_effort"] as? String, "none")   // cleanup needs no deliberation
         let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
         XCTAssertEqual(messages.map { $0["role"] }, ["system", "user"])
         XCTAssertTrue(messages[0]["content"]!.contains("- ASIN"))
@@ -87,5 +91,32 @@ final class OpenAIPolisherTests: XCTestCase {
                               file: StaticString = #filePath, line: UInt = #line) async {
         do { _ = try await body(); XCTFail("expected \(expected)", file: file, line: line) }
         catch { XCTAssertEqual(error as? PolishError, expected, file: file, line: line) }
+    }
+
+    func testRetriesWithoutReasoningEffortWhenTheModelRejectsIt() async throws {
+        let transport = StubTransport()
+        transport.statusQueue = [400]
+        transport.body = completion("明日は休みです。")
+        let polisher = OpenAIPolisher(apiKey: { "test-key" }, model: { "older-model" }, transport: transport)
+
+        let result = try await polisher.polish(raw: "明日は休みです", dictionary: [])
+
+        XCTAssertEqual(result, "明日は休みです。")
+        XCTAssertEqual(transport.requests.count, 2)
+        let second = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(transport.requests[1].httpBody)) as? [String: Any])
+        XCTAssertNil(second["reasoning_effort"])
+    }
+
+    func testReportsTokenUsage() async throws {
+        let transport = StubTransport()
+        transport.body = try JSONSerialization.data(withJSONObject: [
+            "choices": [["message": ["role": "assistant", "content": "明日は休みです。"]]],
+            "usage": ["prompt_tokens": 712, "completion_tokens": 9],
+        ])
+        var reported: [PolishUsage] = []
+        let polisher = OpenAIPolisher(apiKey: { "test-key" }, model: { "m" }, transport: transport,
+                                      onUsage: { reported.append($0) })
+        _ = try await polisher.polish(raw: "明日は休みです", dictionary: [])
+        XCTAssertEqual(reported, [PolishUsage(inputTokens: 712, outputTokens: 9)])
     }
 }
