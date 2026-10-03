@@ -12,7 +12,9 @@ final class RecordingIndicator {
 
     private let model = Model()
     static let panelWidth: CGFloat = 520
-    private lazy var panel = FloatingPanel(size: NSSize(width: RecordingIndicator.panelWidth, height: 44),
+    static let panelHeight: CGFloat = 76
+    private lazy var panel = FloatingPanel(size: NSSize(width: RecordingIndicator.panelWidth,
+                                                        height: RecordingIndicator.panelHeight),
                                            content: IndicatorView(model: model))
 
     func set(_ display: IndicatorDisplay) {
@@ -25,7 +27,7 @@ final class RecordingIndicator {
         if display == .hidden {
             panel.orderOut(nil)
         } else {
-            panel.show(bottomOffset: 24)
+            panel.show(bottomOffset: 10)
         }
     }
 
@@ -45,42 +47,68 @@ private extension IndicatorDisplay {
 private struct IndicatorView: View {
     @ObservedObject var model: RecordingIndicator.Model
 
+    /// The pill never changes size, whatever it shows, so nothing on screen jumps.
+    static let pillSize = CGSize(width: 400, height: 46)
+
     var body: some View {
-        HStack(spacing: 10) {
-            switch model.display {
-            case .recording(let handsFree):
+        content
+            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .frame(width: Self.pillSize.width, height: Self.pillSize.height)
+            .background {
+                ZStack {
+                    // Blurs whatever is behind the pill, then darkens it enough for white text.
+                    BehindWindowBlur()
+                    LinearGradient(colors: [Color.black.opacity(0.38), Color.black.opacity(0.52)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .clipShape(Capsule())
+            }
+            .overlay {
+                Capsule().strokeBorder(
+                    LinearGradient(colors: [Color.white.opacity(0.38), Color.white.opacity(0.08)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+            // The window is wider and taller than the pill: room for the shadow, and the pill
+            // stays centred on screen.
+            .frame(width: RecordingIndicator.panelWidth, height: RecordingIndicator.panelHeight)
+            .environment(\.colorScheme, .dark)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch model.display {
+        case .recording(let handsFree):
+            HStack(spacing: 12) {
                 PulsingDot()
                 Waveform(levels: model.levels.values)
                 TimelineView(.periodic(from: .now, by: 0.5)) { context in
                     Text(Self.elapsed(from: model.startedAt, to: context.date))
                         .monospacedDigit()
+                        .frame(width: 34, alignment: .trailing)
                 }
                 Text(caption(handsFree: handsFree))
-                    .foregroundStyle(.white.opacity(0.75))
-            case .working(let stage):
-                ProgressView().controlSize(.small).colorScheme(.dark)
-                Text(stage == .transcribing ? "文字に起こしています" : "文章を整えています")
-            case .message(let text):
-                Text(text)
-            case .hidden:
-                EmptyView()
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .frame(width: 116, alignment: .leading)
             }
+        case .working(let stage):
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(stage == .transcribing ? "文字に起こしています" : "文章を整えています")
+            }
+        case .message(let text):
+            Text(text).lineLimit(1).minimumScaleFactor(0.8)
+        case .hidden:
+            EmptyView()
         }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 16)
-        .frame(height: 44)
-        .background(Capsule().fill(Color.black.opacity(0.85)))
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)))
-        .fixedSize()
-        // The window keeps one fixed width and the pill sits in its middle, so the pill
-        // stays centred on screen when its text changes length.
-        .frame(width: RecordingIndicator.panelWidth, height: 44)
     }
 
     /// Tells the user whether their voice is actually reaching the app.
     private func caption(handsFree: Bool) -> String {
-        if !model.levels.heardSpeech { return "聞き取り中… 話してください" }
+        if !model.levels.heardSpeech { return "お話しください" }
         return handsFree ? "もう一度押すと終了" : "離すと入力"
     }
 
@@ -95,11 +123,18 @@ private struct Waveform: View {
     let levels: [Float]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 2) {
+        HStack(alignment: .center, spacing: 2.5) {
             ForEach(levels.indices, id: \.self) { index in
+                let level = CGFloat(levels[index])
+                let voiced = levels[index] >= LevelHistory.speechFloor
                 Capsule()
-                    .fill(Color.white.opacity(levels[index] >= LevelHistory.speechFloor ? 1 : 0.45))
-                    .frame(width: 2.5, height: 3 + 23 * CGFloat(levels[index]))
+                    .fill(LinearGradient(
+                        colors: voiced ? [Color(red: 0.62, green: 0.90, blue: 1.0), .white]
+                                       : [Color.white.opacity(0.35), Color.white.opacity(0.35)],
+                        startPoint: .bottom, endPoint: .top))
+                    .frame(width: 2.5, height: 3 + 23 * level)
+                    // Older bars fade out toward the left edge.
+                    .opacity(0.6 + 0.4 * Double(index) / Double(max(1, levels.count - 1)))
             }
         }
         .frame(height: 28)
@@ -112,11 +147,26 @@ private struct PulsingDot: View {
 
     var body: some View {
         Circle()
-            .fill(Color.red)
+            .fill(Color(red: 1.0, green: 0.27, blue: 0.23))
             .frame(width: 9, height: 9)
-            .opacity(dimmed ? 0.35 : 1)
+            .shadow(color: Color.red.opacity(0.8), radius: dimmed ? 1 : 5)
+            .opacity(dimmed ? 0.45 : 1)
             .onAppear {
                 withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { dimmed = true }
             }
     }
+}
+
+/// System blur of the content behind the window (SwiftUI materials only blur within the window).
+private struct BehindWindowBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .vibrantDark)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
