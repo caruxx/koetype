@@ -1,7 +1,7 @@
-# 声タイプ（KoeType）設計書
+# KoeType 設計書
 
 - 作成日: 2026-10-03
-- 表示名: 声タイプ / コード上の識別子: KoeType / バンドルID: `jp.caruvistar.koetype`
+- アプリ名（表示名・識別子とも）: KoeType / バンドルID: `jp.caruvistar.koetype`
 - 置き場所: `DEV/voice-input/`、正本は GitHub private リポジトリ `caruxx/koetype`
 
 ## 1. 目的
