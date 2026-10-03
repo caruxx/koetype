@@ -47,4 +47,41 @@ final class PolishValidatorTests: XCTestCase {
         XCTAssertEqual(PolishValidator.accept(polished: "ASINを確認します。", raw: "エーシンを確認します"), "ASINを確認します。")
         XCTAssertEqual(PolishValidator.accept(polished: "ABC123です。", raw: "ＡＢＣ１２３です"), "ABC123です。")
     }
+
+    func testRejectsResultsThatDropMostOfWhatWasSaid() {
+        // Measured with the on-device model: half the sentence vanished.
+        XCTAssertNil(PolishValidator.accept(
+            polished: "やっぱり木曜日に変更したいです。",
+            raw: "すみません、さっきの件ですが、やっぱり金曜日ではなく木曜日に変更したいです。"))
+    }
+
+    func testAcceptsARestatementBeingTidied() {
+        XCTAssertNotNil(PolishValidator.accept(
+            polished: "来週の水曜日の午後3時から、打ち合わせをお願いしたいんだけど、大丈夫かな。",
+            raw: "来週の火曜日の、あ、じゃなくて、水曜日の午後3時から、打ち合わせをお願いしたいんだけど、大丈夫かな。"))
+    }
+
+    func testRejectsSmallButRealLossesWhenNothingWasRestated() {
+        // Measured with the on-device model: the sentence ending and a contrast were silently dropped.
+        XCTAssertNil(PolishValidator.accept(
+            polished: "レビューが増えないのは、依頼メールの送信が止まっているのが原因だ。",
+            raw: "レビューが増えないのは、依頼メールの送信が止まっているのが原因だと思います。"))
+        XCTAssertNil(PolishValidator.accept(
+            polished: "すみません、さっきの件ですが、やっぱり木曜日に変更したいです。",
+            raw: "すみません、さっきの件ですが、やっぱり金曜日ではなく木曜日に変更したいです。"))
+    }
+
+    func testAcceptsARecognitionErrorBeingRepaired() {
+        XCTAssertEqual(PolishValidator.accept(
+            polished: "明日の会議ですけど、10時からに変更になりました。",
+            raw: "明日の会議なんですけど、10時から2変更になりました。"),
+            "明日の会議ですけど、10時からに変更になりました。")
+    }
+
+    func testMailStyleMayRewordEndingsPolitely() {
+        let raw = "来週の水曜日の午後3時から、打ち合わせをお願いしたいんだけど、大丈夫かな。"
+        let polite = "来週の水曜日の午後3時から、打ち合わせをお願いしたいのですが、大丈夫でしょうか。"
+        XCTAssertNotNil(PolishValidator.accept(polished: polite, raw: raw, style: .mail))
+        XCTAssertNil(PolishValidator.accept(polished: polite, raw: raw, style: .standard))
+    }
 }

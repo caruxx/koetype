@@ -16,14 +16,14 @@ public final class OpenAIPolisher: Polishing, @unchecked Sendable {
         self.onUsage = onUsage
     }
 
-    public func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
+    public func polish(raw: String, dictionary: [DictionaryEntry], style: PolishStyle) async throws -> String {
         var request = try authorized(URL(string: "https://api.openai.com/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = [
             "model": model(),
             "messages": [
-                ["role": "system", "content": PolishPrompt.system(dictionary: dictionary)],
+                ["role": "system", "content": PolishPrompt.system(dictionary: dictionary, style: style)],
                 ["role": "user", "content": PolishPrompt.user(raw: raw)],
             ],
             // Cleanup needs no deliberation; reasoning tokens would only add cost and delay.

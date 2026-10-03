@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import KoeTypeCore
 
 enum AppPaths {
     static var supportDirectory: URL {
@@ -75,8 +76,12 @@ final class AppSettings: ObservableObject {
     @Published var minimumAICharacters: Int {
         didSet { defaults.set(minimumAICharacters, forKey: "minimumAICharacters") }
     }
-    /// Send AI polishing through the Codex CLI (ChatGPT plan) instead of the OpenAI API.
-    @Published var polishViaCodex: Bool { didSet { defaults.set(polishViaCodex, forKey: "polishViaCodex") } }
+    /// Which service performs AI polishing.
+    @Published var polishBackend: PolishBackend { didSet { defaults.set(polishBackend.rawValue, forKey: "polishBackend") } }
+    /// The user's own app-to-style choices, on top of the built-in rules.
+    @Published var appStyleOverrides: [String: PolishStyle] {
+        didSet { defaults.set(AppStyleRules.encode(appStyleOverrides), forKey: "appStyles") }
+    }
     @Published var codexModel: String { didSet { defaults.set(codexModel, forKey: "codexModel") } }
     @Published var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: "launchAtLogin") } }
 
@@ -87,7 +92,8 @@ final class AppSettings: ObservableObject {
         polishEnabled = defaults.object(forKey: "polishEnabled") as? Bool ?? false
         minimumAICharacters = defaults.object(forKey: "minimumAICharacters") as? Int ?? Self.defaultMinimumAICharacters
         polishModel = defaults.string(forKey: "polishModel") ?? Self.defaultPolishModel
-        polishViaCodex = defaults.bool(forKey: "polishViaCodex")
+        polishBackend = PolishBackend.current
+        appStyleOverrides = AppStyleRules.decode(defaults.dictionary(forKey: "appStyles") as? [String: String] ?? [:])
         codexModel = defaults.string(forKey: "codexModel") ?? Self.defaultCodexModel
         launchAtLogin = defaults.bool(forKey: "launchAtLogin")
     }

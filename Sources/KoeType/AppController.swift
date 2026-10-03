@@ -51,12 +51,13 @@ final class AppController: ObservableObject {
             onUsage: { try? usage.record($0, at: Date()) })
         self.usage = usage
         let activePolisher = BackendPolisher(
+            local: AppleModelPolisher(),
             openAI: polisher,
             codex: CodexPolisher(
                 executable: { AppSettings.codexPath },
                 model: { UserDefaults.standard.string(forKey: "codexModel") ?? AppSettings.defaultCodexModel },
                 runner: ProcessRunner()),
-            usesCodex: { UserDefaults.standard.bool(forKey: "polishViaCodex") })
+            backend: { PolishBackend.current })
         self.activePolisher = activePolisher
         recording = RecordingSession(transcriber: transcriber, dictionary: dictionary)
         self.dictionary = dictionary
@@ -71,6 +72,10 @@ final class AppController: ObservableObject {
             minimumAICharacters: {
                 UserDefaults.standard.object(forKey: "minimumAICharacters") as? Int
                     ?? AppSettings.defaultMinimumAICharacters
+            },
+            styleFor: { bundleID in
+                let stored = UserDefaults.standard.dictionary(forKey: "appStyles") as? [String: String] ?? [:]
+                return AppStyleRules(overrides: AppStyleRules.decode(stored)).style(forBundleID: bundleID)
             },
             onStatus: { status in DispatchQueue.main.async { AppController.shared.handle(status) } })
     }
@@ -116,6 +121,7 @@ final class AppController: ObservableObject {
         }
         reloadHotkey()
         reloadModel()
+        if settings.polishEnabled, settings.polishBackend == .local { AppleModelPolisher.prewarm() }
         if !Permissions.microphoneGranted || !Permissions.accessibilityGranted {
             WindowManager.shared.showOnboarding()
         }
@@ -138,7 +144,8 @@ final class AppController: ObservableObject {
     private func perform(_ action: HotkeyStateMachine.Action) {
         switch action {
         case .startRecording:
-            guard transcriber.isReady else { return refuse("モデルを準備中です") }
+            // While the model is still loading the recording is kept and transcribed as soon as it is ready.
+            guard transcriber.canAcceptAudio else { return refuse("音声認識モデルを読み込めませんでした") }
             guard Permissions.microphoneGranted else { return refuse("マイクの使用が許可されていません") }
             do {
                 try recorder.start()
@@ -179,7 +186,9 @@ final class AppController: ObservableObject {
         if seconds >= 0.3 {
             pending += 1
             stage = .transcribing
-            pipeline.submit(samples: samples, durationSeconds: seconds)
+            // The style follows the app that will receive the text.
+            pipeline.submit(samples: samples, durationSeconds: seconds,
+                            appBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
         }
         refreshIndicator()
     }

@@ -77,7 +77,7 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
     }
 
     private func segments(samples: [Float], hints: String) async throws -> [SpeechSegment] {
-        guard let whisperKit = lock.withLock({ self.whisperKit }) else { throw TranscriberError.notReady }
+        guard let whisperKit = await waitForModel() else { throw TranscriberError.notReady }
         // One decode at a time: the model is shared between dictation and long recordings.
         await gate.acquire()
         defer { gate.release() }
@@ -103,6 +103,25 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
             SpeechSegment(text: $0.text, start: Double($0.start))
         }
         return HallucinationFilter.spoken(segments, speechEnd: Double(samples.count) / 16_000)
+    }
+
+    /// Something said right after launch is kept and transcribed once the model has finished loading.
+    private func waitForModel(limitSeconds: Double = 180) async -> WhisperKit? {
+        let deadline = Date().addingTimeInterval(limitSeconds)
+        while Date() < deadline {
+            if let whisperKit = lock.withLock({ self.whisperKit }) { return whisperKit }
+            if case .failed = await currentState() { return nil }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return nil
+    }
+
+    @MainActor private func currentState() -> State { state }
+
+    /// False only when loading has failed and nothing can be transcribed.
+    @MainActor var canAcceptAudio: Bool {
+        if case .failed = state { return isReady }
+        return true
     }
 
     @MainActor private func set(_ newState: State, for loadGeneration: Int) {

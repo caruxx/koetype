@@ -20,8 +20,12 @@ private final class FakeTranscriber: Transcribing, @unchecked Sendable {
 private final class FakePolisher: Polishing, @unchecked Sendable {
     var handler: (String) throws -> String = { $0 + "。" }
     private(set) var calls = 0
-    func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
+    private(set) var styles: [PolishStyle] = []
+    private(set) var inputs: [String] = []
+    func polish(raw: String, dictionary: [DictionaryEntry], style: PolishStyle) async throws -> String {
         calls += 1
+        styles.append(style)
+        inputs.append(raw)
         return try handler(raw)
     }
 }
@@ -72,6 +76,7 @@ final class DictationPipelineTests: XCTestCase {
                                  dictionary: dictionary, history: history,
                                  polishEnabled: { enabled },
                                  minimumAICharacters: { minimum },
+                                 styleFor: { AppStyleRules(overrides: [:]).style(forBundleID: $0) },
                                  now: { Date(timeIntervalSince1970: 100) },
                                  onStatus: { log.add($0) })
     }
@@ -82,11 +87,11 @@ final class DictationPipelineTests: XCTestCase {
         await makePipeline().submit(samples: [0.1], durationSeconds: 2.5).value
 
         XCTAssertEqual(transcriber.hints, ["ASIN"])
-        XCTAssertEqual(deliverer.delivered, ["えーと明日は休みです。"])
+        XCTAssertEqual(deliverer.delivered, ["明日は休みです。"])
         XCTAssertEqual(log.all, [.transcribing, .polishing, .delivered(.inserted, polished: true)])
         let item = try XCTUnwrap(history.items.first)
         XCTAssertEqual(item.rawText, "えーと明日は休みです")
-        XCTAssertEqual(item.finalText, "えーと明日は休みです。")
+        XCTAssertEqual(item.finalText, "明日は休みです。")
         XCTAssertEqual(item.appName, "メモ")
         XCTAssertEqual(item.outcome, .inserted)
         XCTAssertTrue(item.polished)
@@ -216,5 +221,37 @@ final class DictationPipelineTests: XCTestCase {
         await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
         XCTAssertTrue(deliverer.delivered.isEmpty)
         XCTAssertEqual(log.all, [.transcribing, .nothingHeard])
+    }
+
+    func testStyleFollowsTheAppThatReceivesTheText() async {
+        transcriber.results = [.success("来週の火曜日の午後3時から打ち合わせをお願いします"),
+                               .success("来週の火曜日の午後3時から打ち合わせをお願いします")]
+        let pipeline = makePipeline()
+        await pipeline.submit(samples: [0.1], durationSeconds: 1, appBundleID: "com.tinyspeck.slackmacgap").value
+        await pipeline.submit(samples: [0.1], durationSeconds: 1, appBundleID: "com.apple.mail").value
+        XCTAssertEqual(polisher.styles, [.chat, .mail])
+    }
+
+    func testMinimalStyleAppsNeverCallTheModel() async {
+        transcriber.results = [.success("えーと、来週の火曜日の午後3時から打ち合わせをお願いします。")]
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1, appBundleID: "com.apple.Terminal").value
+        XCTAssertEqual(polisher.calls, 0)
+        XCTAssertEqual(deliverer.delivered, ["来週の火曜日の午後3時から打ち合わせをお願いします。"])
+    }
+
+    func testChatAppsGetNoFinalFullStop() async {
+        transcriber.results = [.success("来週の火曜日の午後3時から打ち合わせをお願いします")]
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1, appBundleID: "jp.naver.line.mac").value
+        XCTAssertEqual(deliverer.delivered, ["来週の火曜日の午後3時から打ち合わせをお願いします"])
+    }
+
+    func testModelReceivesLocallyCleanedTextAndItsOutputIsCleanedAgain() async {
+        transcriber.results = [.success("えーと、来週の火曜日の午後3時から打ち合わせをお願いします。")]
+        // Measured: the on-device model sometimes puts fillers back.
+        polisher.handler = { input in "えっと、" + input }
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(polisher.inputs, ["来週の火曜日の午後3時から打ち合わせをお願いします。"])
+        XCTAssertEqual(deliverer.delivered, ["来週の火曜日の午後3時から打ち合わせをお願いします。"])
+        XCTAssertEqual(history.items.first?.rawText, "えーと、来週の火曜日の午後3時から打ち合わせをお願いします。")
     }
 }

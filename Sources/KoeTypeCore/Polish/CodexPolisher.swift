@@ -18,12 +18,12 @@ public final class CodexPolisher: Polishing, @unchecked Sendable {
         self.executable = executable; self.model = model; self.runner = runner; self.timeout = timeout
     }
 
-    public func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
+    public func polish(raw: String, dictionary: [DictionaryEntry], style: PolishStyle) async throws -> String {
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("koetype-codex-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: output) }
         let prompt = [
-            PolishPrompt.system(dictionary: dictionary),
+            PolishPrompt.system(dictionary: dictionary, style: style),
             "- ファイルの読み書きやコマンドの実行は一切しない。清書した本文だけを返す。",
             "",
             PolishPrompt.user(raw: raw),

@@ -43,4 +43,10 @@ final class PolishPromptTests: XCTestCase {
         XCTAssertTrue(prompt.contains("10時から2変更"))
         XCTAssertTrue(prompt.contains("10時からに変更"))
     }
+
+    func testInstructionsForbidDroppingSentencesOrTreatingContrastAsRestatement() {
+        let prompt = PolishPrompt.system(dictionary: [])
+        XCTAssertTrue(prompt.contains("すべて残す"))
+        XCTAssertTrue(prompt.contains("ではなく"))
+    }
 }

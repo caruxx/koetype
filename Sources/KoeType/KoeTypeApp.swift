@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppController.shared.start()
         if CommandLine.arguments.contains("--open-settings") { WindowManager.shared.showSettings() }
+        if CommandLine.arguments.contains("--open-app-styles") { WindowManager.shared.showAppStyles() }
     }
 }
 

@@ -119,4 +119,14 @@ final class OpenAIPolisherTests: XCTestCase {
         _ = try await polisher.polish(raw: "明日は休みです", dictionary: [])
         XCTAssertEqual(reported, [PolishUsage(inputTokens: 712, outputTokens: 9)])
     }
+
+    func testStyleIsPartOfTheInstructions() async throws {
+        let transport = StubTransport()
+        transport.body = completion("了解です")
+        let polisher = OpenAIPolisher(apiKey: { "test-key" }, model: { "m" }, transport: transport)
+        _ = try await polisher.polish(raw: "了解です", dictionary: [], style: .chat)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(transport.requests[0].httpBody)) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+        XCTAssertTrue(messages[0]["content"]!.contains("チャット"))
+    }
 }

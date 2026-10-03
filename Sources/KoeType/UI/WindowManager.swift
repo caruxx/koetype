@@ -44,6 +44,10 @@ final class WindowManager {
         }
     }
 
+    func showAppStyles() {
+        show(id: "appStyles", title: "アプリ別の文体", size: NSSize(width: 500, height: 460)) { AppStylesView() }
+    }
+
     func showOnboarding() {
         show(id: "onboarding", title: "KoeType へようこそ", size: NSSize(width: 460, height: 300)) { OnboardingView() }
     }
