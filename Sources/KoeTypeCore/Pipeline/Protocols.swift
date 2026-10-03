@@ -21,3 +21,27 @@ public struct URLSessionTransport: HTTPTransport {
         return (data, http)
     }
 }
+
+public protocol Transcribing: Sendable {
+    func transcribe(samples: [Float], hints: String) async throws -> String
+}
+
+public struct DeliveryResult: Equatable, Sendable {
+    public var outcome: DeliveryOutcome
+    public var appName: String?
+
+    public init(outcome: DeliveryOutcome, appName: String?) {
+        self.outcome = outcome; self.appName = appName
+    }
+}
+
+public protocol TextDelivering: Sendable {
+    func deliver(_ text: String) async -> DeliveryResult
+}
+
+public enum PipelineStatus: Equatable, Sendable {
+    case transcribing, polishing
+    case delivered(DeliveryOutcome, polished: Bool)
+    case nothingHeard
+    case failed(String)
+}
