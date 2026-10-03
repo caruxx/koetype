@@ -16,10 +16,17 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
     func load(model: String, repo: String? = nil) async {
         do {
             try FileManager.default.createDirectory(at: AppPaths.modelsDirectory, withIntermediateDirectories: true)
-            await set(.downloading(0))
-            let folder = try await WhisperKit.download(
+            let repoID = repo ?? "argmaxinc/whisperkit-coreml"
+            let local = AppPaths.modelsDirectory
+                .appendingPathComponent("models").appendingPathComponent(repoID).appendingPathComponent(model)
+            let onDisk = FileManager.default.fileExists(
+                atPath: local.appendingPathComponent("AudioEncoder.mlmodelc").path)
+            if !onDisk { await set(.downloading(0)) }
+            // Downloading always contacts the network, so skip it when the model is already here:
+            // the app must start without a connection.
+            let folder = onDisk ? local : try await WhisperKit.download(
                 variant: model, downloadBase: AppPaths.modelsDirectory,
-                from: repo ?? "argmaxinc/whisperkit-coreml",
+                from: repoID,
                 progressCallback: { [weak self] progress in
                     Task { await self?.set(.downloading(progress.fractionCompleted)) }
                 })
@@ -43,11 +50,20 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
         }
         let options = DecodingOptions(task: .transcribe, language: "ja", temperature: 0,
                                       usePrefillPrompt: true, detectLanguage: false,
-                                      skipSpecialTokens: true, withoutTimestamps: true,
+                                      skipSpecialTokens: true, withoutTimestamps: false,
                                       promptTokens: promptTokens)
         let padded = AudioPadding.withTrailingSilence(samples, sampleRate: 16_000, seconds: 1.2)
         let results = try await whisperKit.transcribe(audioArray: padded, decodeOptions: options)
-        return results.map(\.text).joined()
+        let segments = results.flatMap(\.segments).map {
+            SpeechSegment(text: $0.text, start: Double($0.start))
+        }
+        if ProcessInfo.processInfo.environment["KOETYPE_DEBUG_SEGMENTS"] != nil {
+            for segment in results.flatMap(\.segments) {
+                FileHandle.standardError.write(Data(
+                    String(format: "segment %.2f-%.2f %@\n", segment.start, segment.end, segment.text).utf8))
+            }
+        }
+        return HallucinationFilter.join(segments, speechEnd: Double(samples.count) / 16_000)
     }
 
     @MainActor private func set(_ newState: State) { state = newState }

@@ -37,6 +37,7 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
         for keyDown in [true, false] {
             let event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: keyDown)   // 9 = V
             event?.flags = .maskCommand   // explicit: ignore a trigger key the user may be holding again
+            event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.syntheticEventTag)
             event?.post(tap: .cghidEventTap)
         }
 
