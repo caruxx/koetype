@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var testing = false
     @State private var loginMessage = ""
     @State private var accessibilityGranted = Permissions.accessibilityGranted
+    @State private var monthlyUsage = AppController.shared.usage.month(containing: Date())
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -47,7 +48,20 @@ struct SettingsView: View {
             }
 
             Section("整形") {
-                Toggle("AI で整形する", isOn: $settings.polishEnabled)
+                Picker("整形の方法", selection: $settings.polishEnabled) {
+                    Text("ローカルのみ（無料・Mac 内で完結）").tag(false)
+                    Text("AI で高精度に整える（OpenAI \(settings.polishModel)）").tag(true)
+                }
+                .pickerStyle(.radioGroup)
+                Text("ローカルのみでも、句読点の付与と「えーと」「あのー」などの除去は行います。言い直しの整理や辞書どおりの表記統一まで求める場合は、OpenAI の Luna（gpt-6-luna）に接続すると精度が上がります。接続には下の API キーが必要で、利用した分だけ OpenAI から課金されます。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Stepper(value: $settings.minimumAICharacters, in: 0...200, step: 5) {
+                    Text("AI に送るのは \(settings.minimumAICharacters) 文字以上の発話のみ")
+                }
+                .disabled(!settings.polishEnabled)
+                Text("これより短い発話はローカル処理だけで入力します（速く、費用もかかりません）。0 にするとすべて AI に送ります。")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("今月の AI 利用") { Text(usageText) }
                 TextField("モデル ID", text: $settings.polishModel)
                 HStack {
                     Button("モデル一覧を取得") { fetchModels() }
@@ -92,6 +106,19 @@ struct SettingsView: View {
             accessibilityGranted = Permissions.accessibilityGranted
             controller.refreshPermissions()
         }
+        .onReceive(NotificationCenter.default.publisher(for: UsageStore.didChange)
+            .receive(on: DispatchQueue.main)) { _ in
+            monthlyUsage = controller.usage.month(containing: Date())
+        }
+    }
+
+    /// Request count and a cost estimate at the default model's list price.
+    private var usageText: String {
+        let yen = monthlyUsage.estimatedYen(
+            inputDollarsPerMillion: AppSettings.estimateInputDollarsPerMillion,
+            outputDollarsPerMillion: AppSettings.estimateOutputDollarsPerMillion,
+            yenPerDollar: AppSettings.estimateYenPerDollar)
+        return String(format: "%d 回 / 推定 約 %.0f 円（gpt-6-luna の定価で計算した目安）", monthlyUsage.requests, yen)
     }
 
     private var modelStateText: String {

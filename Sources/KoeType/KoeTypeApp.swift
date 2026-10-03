@@ -4,6 +4,7 @@ import KoeTypeCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppController.shared.start()
+        if CommandLine.arguments.contains("--open-settings") { WindowManager.shared.showSettings() }
     }
 }
 

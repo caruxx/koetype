@@ -11,6 +11,7 @@ public actor DictationPipeline {
     private let dictionary: DictionaryStore
     private let history: HistoryStore
     private let polishEnabled: @Sendable () -> Bool
+    private let minimumAICharacters: @Sendable () -> Int
     private let hintLimit: Int
     private let now: @Sendable () -> Date
     private let onStatus: @Sendable (PipelineStatus) -> Void
@@ -19,12 +20,14 @@ public actor DictationPipeline {
     public init(transcriber: Transcribing, polisher: Polishing, deliverer: TextDelivering,
                 dictionary: DictionaryStore, history: HistoryStore,
                 polishEnabled: @escaping @Sendable () -> Bool,
+                minimumAICharacters: @escaping @Sendable () -> Int = { 0 },
                 hintLimit: Int = 120,
                 now: @escaping @Sendable () -> Date = Date.init,
                 onStatus: @escaping @Sendable (PipelineStatus) -> Void = { _ in }) {
         self.transcriber = transcriber; self.polisher = polisher; self.deliverer = deliverer
         self.dictionary = dictionary; self.history = history
-        self.polishEnabled = polishEnabled; self.hintLimit = hintLimit
+        self.polishEnabled = polishEnabled; self.minimumAICharacters = minimumAICharacters
+        self.hintLimit = hintLimit
         self.now = now; self.onStatus = onStatus
         let (stream, continuation) = AsyncStream<Job>.makeStream()
         self.jobs = continuation
@@ -61,9 +64,15 @@ public actor DictationPipeline {
             return
         }
 
-        var finalText = raw
+        // Local cleanup always runs. The model is consulted only when it is switched on and
+        // the utterance is long enough to be worth it; its result replaces the local one.
+        var finalText = LocalCleanup.clean(raw)
+        guard !finalText.isEmpty else {
+            onStatus(.nothingHeard)
+            return
+        }
         var polished = false
-        if polishEnabled() {
+        if polishEnabled(), PolishDecision.shouldUseAI(for: finalText, minimumCharacters: minimumAICharacters()) {
             onStatus(.polishing)
             if let result = try? await polisher.polish(raw: raw, dictionary: dictionary.entries),
                let accepted = PolishValidator.accept(polished: result, raw: raw) {
