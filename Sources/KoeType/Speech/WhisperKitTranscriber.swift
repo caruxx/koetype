@@ -45,7 +45,8 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
                                       usePrefillPrompt: true, detectLanguage: false,
                                       skipSpecialTokens: true, withoutTimestamps: true,
                                       promptTokens: promptTokens)
-        let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+        let padded = AudioPadding.withTrailingSilence(samples, sampleRate: 16_000, seconds: 1.2)
+        let results = try await whisperKit.transcribe(audioArray: padded, decodeOptions: options)
         return results.map(\.text).joined()
     }
 
