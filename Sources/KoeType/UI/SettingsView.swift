@@ -36,11 +36,14 @@ struct SettingsView: View {
                 Toggle("AI で高精度に整える", isOn: $settings.polishEnabled)
                 // Everything about the AI connection stays hidden until it is switched on.
                 if settings.polishEnabled {
-                    Picker("接続方法", selection: $settings.polishViaCodex) {
-                        Text("OpenAI API（速い・従量課金）").tag(false)
-                        Text("Codex CLI（ChatGPT の利用枠・約 5 秒）").tag(true)
+                    Picker("処理する場所", selection: $settings.polishBackend) {
+                        ForEach(PolishBackend.allCases) { Text($0.label).tag($0) }
                     }
-                    if !settings.polishViaCodex {
+                    .onChange(of: settings.polishBackend) {
+                        testMessage = ""
+                        if settings.polishBackend == .local { AppleModelPolisher.prewarm() }
+                    }
+                    if settings.polishBackend == .openAI {
                         HStack {
                             SecureField(hasAPIKey ? "API キー（保存済み）" : "OpenAI の API キー", text: $apiKeyDraft)
                             Button("保存") { saveKey(apiKeyDraft) }
@@ -55,16 +58,15 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .lineLimit(2).textSelection(.enabled)
                     }
-                    if !settings.polishViaCodex { LabeledContent("今月の利用", value: usageText) }
+                    if settings.polishBackend == .openAI { LabeledContent("今月の利用", value: usageText) }
+                    Button("アプリ別の文体…") { WindowManager.shared.showAppStyles() }
                 }
             } header: {
                 Text("整形")
             } footer: {
                 Text(settings.polishEnabled
-                     ? (settings.polishViaCodex
-                        ? "ChatGPT にログイン済みの Codex CLI を通して整えます。API の課金はありませんが、1 回あたり約 5 秒かかり、ChatGPT の利用枠を消費します。"
-                        : "言い直しの整理、文脈からの誤認識の修正、辞書どおりの表記統一を OpenAI の Luna で行います。利用した分だけ課金されます。")
-                     : "オフの間は Mac の中だけで処理します（無料）。句読点と「えーと」などの除去は行います。精度を上げたいときにオンにすると、OpenAI の Luna に接続できます。")
+                     ? backendNote
+                     : "オフの間は句読点と「えーと」などの除去だけを行います。オンにすると、言い直しの整理や文脈からの誤認識の修正、アプリに合わせた文体の調整を行います。")
                     .footnoteStyle()
             }
 
@@ -131,6 +133,19 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: UsageStore.didChange)
             .receive(on: DispatchQueue.main)) { _ in
             monthlyUsage = controller.usage.month(containing: Date())
+        }
+    }
+
+    private var backendNote: String {
+        switch settings.polishBackend {
+        case .local:
+            return AppleModelPolisher.isAvailable
+                ? "macOS に内蔵の AI で整えます。文章は Mac の外に出ず、費用もかかりません。さらに精度を上げたいときは OpenAI の Luna（API または Codex）に切り替えられます。"
+                : "この Mac では内蔵の AI を使えません（Apple Intelligence が有効か確認してください）。OpenAI API か Codex CLI を選んでください。"
+        case .openAI:
+            return "OpenAI の Luna で整えます。文字起こし後の文章を送信し、利用した分だけ課金されます。"
+        case .codex:
+            return "ChatGPT にログイン済みの Codex CLI を通して整えます。API の課金はありませんが、1 回あたり約 5 秒かかり、ChatGPT の利用枠を消費します。"
         }
     }
 
@@ -220,6 +235,7 @@ struct SettingsView: View {
         case .http(status: 429): return "利用上限に達しています"
         case .http(let status): return "エラー（HTTP \(status)）"
         case .badResponse: return "応答を解釈できませんでした"
+        case .unavailable: return "この Mac では使えません"
         case nil: return "通信できませんでした"
         }
     }

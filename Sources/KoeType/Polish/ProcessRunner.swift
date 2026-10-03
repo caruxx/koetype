@@ -40,14 +40,47 @@ struct ProcessRunner: CommandRunning {
     }
 }
 
+enum PolishBackend: String, CaseIterable, Identifiable {
+    /// The model built into macOS.
+    case local
+    case openAI
+    case codex
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local: return "この Mac の中で（無料・約 1 秒）"
+        case .openAI: return "OpenAI API（高精度・従量課金）"
+        case .codex: return "Codex CLI（ChatGPT の利用枠・約 5 秒）"
+        }
+    }
+
+    /// The backend stored in settings; older versions stored only a Codex on/off flag.
+    static var current: PolishBackend {
+        let defaults = UserDefaults.standard
+        if let stored = defaults.string(forKey: "polishBackend"), let backend = PolishBackend(rawValue: stored) {
+            return backend
+        }
+        return defaults.bool(forKey: "polishViaCodex") ? .codex : .local
+    }
+}
+
 /// Sends each request to whichever service is selected in settings at that moment.
 struct BackendPolisher: Polishing {
+    let local: Polishing
     let openAI: Polishing
     let codex: Polishing
-    let usesCodex: @Sendable () -> Bool
+    let backend: @Sendable () -> PolishBackend
 
-    func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
-        try await (usesCodex() ? codex : openAI).polish(raw: raw, dictionary: dictionary)
+    func polish(raw: String, dictionary: [DictionaryEntry], style: PolishStyle) async throws -> String {
+        let polisher: Polishing
+        switch backend() {
+        case .local: polisher = local
+        case .openAI: polisher = openAI
+        case .codex: polisher = codex
+        }
+        return try await polisher.polish(raw: raw, dictionary: dictionary, style: style)
     }
 }
 

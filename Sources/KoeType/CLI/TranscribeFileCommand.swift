@@ -19,6 +19,15 @@ enum TranscribeFileCommand {
 
         let transcriber = WhisperKitTranscriber()
         var started = Date()
+        if arguments.contains("--while-loading") {
+            // Mirrors dictating right after launch: transcription is requested before loading has finished.
+            let repo = value("--model-repo")
+            Task { await transcriber.load(model: model, repo: repo) }
+            let text = (try? await transcriber.transcribe(samples: samples, hints: hints)) ?? "(failed)"
+            print(String(format: "waited_and_transcribed_seconds=%.2f", Date().timeIntervalSince(started)))
+            print("raw=\(HallucinationFilter.clean(text))")
+            return 0
+        }
         await transcriber.load(model: model, repo: value("--model-repo"))
         guard transcriber.isReady else {
             FileHandle.standardError.write(Data("could not load model: \(transcriber.state)\n".utf8))
@@ -54,15 +63,24 @@ enum TranscribeFileCommand {
 
         if arguments.contains("--polish"), !raw.isEmpty {
             let polishModel = UserDefaults.standard.string(forKey: "polishModel") ?? AppSettings.defaultPolishModel
-            let polisher: Polishing = arguments.contains("--codex")
-                ? CodexPolisher(executable: { AppSettings.codexPath }, model: { AppSettings.defaultCodexModel },
-                                runner: ProcessRunner())
-                : OpenAIPolisher(apiKey: { KeychainStore.readAPIKey() }, model: { polishModel })
+            let style = PolishStyle(rawValue: value("--style") ?? "") ?? .standard
+            let polisher: Polishing
+            if arguments.contains("--local") {
+                polisher = AppleModelPolisher()
+            } else if arguments.contains("--codex") {
+                polisher = CodexPolisher(executable: { AppSettings.codexPath }, model: { AppSettings.defaultCodexModel },
+                                         runner: ProcessRunner())
+            } else {
+                polisher = OpenAIPolisher(apiKey: { KeychainStore.readAPIKey() }, model: { polishModel })
+            }
             started = Date()
             do {
-                let polished = try await polisher.polish(raw: raw, dictionary: [])
+                // Same order as the app: local cleanup, then the model, then local cleanup again.
+                let local = LocalCleanup.clean(raw)
+                let polished = try await polisher.polish(raw: local, dictionary: [], style: style)
                 print(String(format: "polish_seconds=%.2f", Date().timeIntervalSince(started)))
-                print("polished=\(PolishValidator.accept(polished: polished, raw: raw) ?? raw)")
+                let accepted = PolishValidator.accept(polished: polished, raw: local, style: style).map(LocalCleanup.clean)
+                print("polished=\(style.finalized(accepted ?? local))\(accepted == nil ? "  (model result rejected: local text used)" : "")")
             } catch {
                 print("polish_error=\(error)")
             }

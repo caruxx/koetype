@@ -1,7 +1,13 @@
 import Foundation
 
 public protocol Polishing: Sendable {
-    func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String
+    func polish(raw: String, dictionary: [DictionaryEntry], style: PolishStyle) async throws -> String
+}
+
+public extension Polishing {
+    func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
+        try await polish(raw: raw, dictionary: dictionary, style: .standard)
+    }
 }
 
 public protocol HTTPTransport: Sendable {
@@ -10,6 +16,8 @@ public protocol HTTPTransport: Sendable {
 
 public enum PolishError: Error, Equatable {
     case missingAPIKey, timeout, http(status: Int), badResponse
+    /// The selected service cannot be used on this Mac at all.
+    case unavailable
 }
 
 public struct URLSessionTransport: HTTPTransport {

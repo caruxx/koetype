@@ -12,6 +12,7 @@ public actor DictationPipeline {
     private let history: HistoryStore
     private let polishEnabled: @Sendable () -> Bool
     private let minimumAICharacters: @Sendable () -> Int
+    private let styleFor: @Sendable (String?) -> PolishStyle
     private let hintLimit: Int
     private let now: @Sendable () -> Date
     private let onStatus: @Sendable (PipelineStatus) -> Void
@@ -21,12 +22,14 @@ public actor DictationPipeline {
                 dictionary: DictionaryStore, history: HistoryStore,
                 polishEnabled: @escaping @Sendable () -> Bool,
                 minimumAICharacters: @escaping @Sendable () -> Int = { 0 },
+                styleFor: @escaping @Sendable (String?) -> PolishStyle = { _ in .standard },
                 hintLimit: Int = 120,
                 now: @escaping @Sendable () -> Date = Date.init,
                 onStatus: @escaping @Sendable (PipelineStatus) -> Void = { _ in }) {
         self.transcriber = transcriber; self.polisher = polisher; self.deliverer = deliverer
         self.dictionary = dictionary; self.history = history
         self.polishEnabled = polishEnabled; self.minimumAICharacters = minimumAICharacters
+        self.styleFor = styleFor
         self.hintLimit = hintLimit
         self.now = now; self.onStatus = onStatus
         let (stream, continuation) = AsyncStream<Job>.makeStream()
@@ -39,16 +42,17 @@ public actor DictationPipeline {
     deinit { jobs.finish() }
 
     @discardableResult
-    public nonisolated func submit(samples: [Float], durationSeconds: Double) -> Task<Void, Never> {
+    public nonisolated func submit(samples: [Float], durationSeconds: Double,
+                                   appBundleID: String? = nil) -> Task<Void, Never> {
         let (signal, finish) = AsyncStream<Void>.makeStream()
         jobs.yield {
-            await self.process(samples: samples, durationSeconds: durationSeconds)
+            await self.process(samples: samples, durationSeconds: durationSeconds, appBundleID: appBundleID)
             finish.finish()
         }
         return Task { for await _ in signal {} }
     }
 
-    private func process(samples: [Float], durationSeconds: Double) async {
+    private func process(samples: [Float], durationSeconds: Double, appBundleID: String?) async {
         onStatus(.transcribing)
         let transcript: String
         do {
@@ -72,11 +76,17 @@ public actor DictationPipeline {
             return
         }
         var polished = false
-        if polishEnabled(), PolishDecision.shouldUseAI(for: finalText, minimumCharacters: minimumAICharacters()) {
+        let style = styleFor(appBundleID)
+        if polishEnabled(), style != .minimal,
+           PolishDecision.shouldUseAI(for: finalText, minimumCharacters: minimumAICharacters()) {
             onStatus(.polishing)
-            if let result = try? await polisher.polish(raw: raw, dictionary: dictionary.entries),
-               let accepted = PolishValidator.accept(polished: result, raw: raw) {
-                finalText = accepted
+            // The model works on text whose fillers are already gone, and whatever it returns
+            // goes through the same local cleanup, so a filler it reintroduces cannot survive.
+            let local = finalText
+            if let result = try? await polisher.polish(raw: local, dictionary: dictionary.entries, style: style),
+               let accepted = PolishValidator.accept(polished: result, raw: local, style: style) {
+                let cleaned = LocalCleanup.clean(accepted)
+                finalText = style.finalized(cleaned.isEmpty ? local : cleaned)
                 polished = true
             }
         }
