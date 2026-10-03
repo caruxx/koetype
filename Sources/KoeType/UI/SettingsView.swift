@@ -36,11 +36,17 @@ struct SettingsView: View {
                 Toggle("AI で高精度に整える", isOn: $settings.polishEnabled)
                 // Everything about the AI connection stays hidden until it is switched on.
                 if settings.polishEnabled {
-                    HStack {
-                        SecureField(hasAPIKey ? "API キー（保存済み）" : "OpenAI の API キー", text: $apiKeyDraft)
-                        Button("保存") { saveKey(apiKeyDraft) }
-                            .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-                        if hasAPIKey { Button("削除") { saveKey("") } }
+                    Picker("接続方法", selection: $settings.polishViaCodex) {
+                        Text("OpenAI API（速い・従量課金）").tag(false)
+                        Text("Codex CLI（ChatGPT の利用枠・約 5 秒）").tag(true)
+                    }
+                    if !settings.polishViaCodex {
+                        HStack {
+                            SecureField(hasAPIKey ? "API キー（保存済み）" : "OpenAI の API キー", text: $apiKeyDraft)
+                            Button("保存") { saveKey(apiKeyDraft) }
+                                .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                            if hasAPIKey { Button("削除") { saveKey("") } }
+                        }
                     }
                     HStack {
                         Button("接続テスト") { runTest() }.disabled(testing)
@@ -49,13 +55,15 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .lineLimit(2).textSelection(.enabled)
                     }
-                    LabeledContent("今月の利用", value: usageText)
+                    if !settings.polishViaCodex { LabeledContent("今月の利用", value: usageText) }
                 }
             } header: {
                 Text("整形")
             } footer: {
                 Text(settings.polishEnabled
-                     ? "言い直しの整理、文脈からの誤認識の修正、辞書どおりの表記統一を OpenAI の Luna で行います。利用した分だけ課金されます。"
+                     ? (settings.polishViaCodex
+                        ? "ChatGPT にログイン済みの Codex CLI を通して整えます。API の課金はありませんが、1 回あたり約 5 秒かかり、ChatGPT の利用枠を消費します。"
+                        : "言い直しの整理、文脈からの誤認識の修正、辞書どおりの表記統一を OpenAI の Luna で行います。利用した分だけ課金されます。")
                      : "オフの間は Mac の中だけで処理します（無料）。句読点と「えーと」などの除去は行います。精度を上げたいときにオンにすると、OpenAI の Luna に接続できます。")
                     .footnoteStyle()
             }
@@ -93,6 +101,7 @@ struct SettingsView: View {
                             .labelsHidden().frame(width: 170)
                         }
                     }
+                    TextField("Codex のモデル", text: $settings.codexModel)
                     TextField("音声認識モデル", text: $whisperModelDraft)
                     HStack {
                         Button("適用") {
@@ -104,6 +113,7 @@ struct SettingsView: View {
                             settings.whisperModel = AppSettings.defaultWhisperModel
                             settings.polishModel = AppSettings.defaultPolishModel
                             settings.minimumAICharacters = AppSettings.defaultMinimumAICharacters
+                            settings.codexModel = AppSettings.defaultCodexModel
                             controller.reloadModel()
                         }
                         Spacer()
@@ -181,7 +191,7 @@ struct SettingsView: View {
         Task {
             let started = Date()
             do {
-                let result = try await controller.polisher.polish(
+                let result = try await controller.activePolisher.polish(
                     raw: "えーと、これは、あのー接続テストです", dictionary: [])
                 testMessage = String(format: "成功（%.1f 秒）: %@", Date().timeIntervalSince(started), result)
             } catch {

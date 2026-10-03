@@ -7,24 +7,60 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
     init(copyBox: CopyBoxPanel) { self.copyBox = copyBox }
 
     func deliver(_ text: String) async -> DeliveryResult {
-        await MainActor.run { () -> DeliveryResult in
-            let (snapshot, appName) = FocusInspector.snapshot()
-            switch InsertionDecision.plan(for: snapshot) {
-            case .pasteOnly:
-                paste(text)
-                return DeliveryResult(outcome: .inserted, appName: appName)
-            case .copyBoxOnly:
-                copyBox.show(text: text)
-                return DeliveryResult(outcome: .copyBox, appName: appName)
-            case .pasteAndCopyBox:
-                paste(text)
-                copyBox.show(text: text)
-                return DeliveryResult(outcome: .insertedAndCopyBox, appName: appName)
-            }
-        }
+        await deliverOnMain(text)
     }
 
-    @MainActor private func paste(_ text: String) {
+    @MainActor private func deliverOnMain(_ text: String) async -> DeliveryResult {
+        let focus = FocusInspector.inspect()
+        let plan = InsertionDecision.plan(for: focus.snapshot)
+        let outcome: DeliveryOutcome
+        var verified: Bool?
+        switch plan {
+        case .copyBoxOnly:
+            copyBox.show(text: text)
+            outcome = .copyBox
+        case .pasteOnly:
+            let restore = paste(text)
+            await pause(Self.settleSeconds)
+            restore()
+            outcome = .inserted
+        case .pasteAndCopyBox:
+            let restore = paste(text)
+            copyBox.show(text: text)
+            await pause(Self.settleSeconds)
+            restore()
+            outcome = .insertedAndCopyBox
+        case .pasteThenVerify:
+            let before = focus.snapshot?.valueLength ?? 0
+            let restore = paste(text)
+            var inserted = false
+            // Slow apps take a few hundred milliseconds to act on the paste.
+            for _ in 0..<10 where !inserted {
+                await pause(0.1)
+                inserted = InsertionDecision.didInsert(
+                    lengthBefore: before, lengthAfter: focus.element.flatMap(FocusInspector.length(of:)))
+            }
+            if !inserted { copyBox.show(text: text) }
+            await pause(0.2)
+            restore()
+            verified = inserted
+            outcome = inserted ? .inserted : .copyBox
+        }
+        InsertionLog.record(app: focus.appName, snapshot: focus.snapshot, plan: plan, verified: verified)
+        return DeliveryResult(outcome: outcome, appName: focus.appName)
+    }
+
+    /// How long the dictated text stays on the clipboard before the previous content returns.
+    /// Electron and browser apps read the clipboard noticeably later than the key event.
+    private static let settleSeconds = 0.8
+
+    private func pause(_ seconds: Double) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    /// Puts the text on the clipboard and sends the paste shortcut.
+    /// Returns a closure that puts the previous clipboard content back.
+    @MainActor private func paste(_ text: String) -> () -> Void {
         let pasteboard = NSPasteboard.general
         // Keep every type of every item so images and files survive, not only strings.
         let saved: [[(NSPasteboard.PasteboardType, Data)]] = (pasteboard.pasteboardItems ?? []).map { item in
@@ -44,7 +80,7 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
             event?.post(tap: .cghidEventTap)
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        return {
             guard ClipboardRestorePolicy.shouldRestore(changeCountAfterOurWrite: ourChangeCount,
                                                        currentChangeCount: pasteboard.changeCount) else { return }
             pasteboard.clearContents()
