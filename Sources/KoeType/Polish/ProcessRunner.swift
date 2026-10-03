@@ -20,11 +20,9 @@ struct ProcessRunner: CommandRunning {
         process.standardError = FileHandle.nullDevice
 
         return try await withCheckedThrowingContinuation { continuation in
-            let lock = NSLock()
-            var finished = false
+            let once = Once()
             @Sendable func finish(_ result: Result<Int32, Error>) {
-                let first: Bool = lock.withLock { if finished { return false }; finished = true; return true }
-                if first { continuation.resume(with: result) }
+                if once.first() { continuation.resume(with: result) }
             }
             process.terminationHandler = { finish(.success($0.terminationStatus)) }
             do {
@@ -50,5 +48,19 @@ struct BackendPolisher: Polishing {
 
     func polish(raw: String, dictionary: [DictionaryEntry]) async throws -> String {
         try await (usesCodex() ? codex : openAI).polish(raw: raw, dictionary: dictionary)
+    }
+}
+
+/// True exactly once, however many threads ask.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var used = false
+
+    func first() -> Bool {
+        lock.withLock {
+            if used { return false }
+            used = true
+            return true
+        }
     }
 }

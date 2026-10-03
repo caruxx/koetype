@@ -10,7 +10,7 @@ enum TranscribeFileCommand {
             guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
             return arguments[index + 1]
         }
-        guard let path = value("--transcribe-file"), let samples = loadSamples(path: path) else {
+        guard let path = value("--transcribe-file"), let samples = AudioFileLoader.load(path: path) else {
             FileHandle.standardError.write(Data("could not read audio file\n".utf8))
             return 2
         }
@@ -25,6 +25,19 @@ enum TranscribeFileCommand {
             return 3
         }
         print(String(format: "load_seconds=%.2f", Date().timeIntervalSince(started)))
+
+        if arguments.contains("--long") {
+            // Long-form path used for recordings: chunked, with timestamps.
+            started = Date()
+            guard let segments = try? await transcriber.transcribeLong(samples: samples, hints: hints, progress: { _ in }) else {
+                return 3
+            }
+            print(String(format: "transcribe_seconds=%.2f", Date().timeIntervalSince(started)))
+            print(TranscriptFormatter.markdown(title: "記録", startedAt: Date(),
+                                               durationSeconds: Double(samples.count) / AudioRecorder.sampleRate,
+                                               segments: segments))
+            return 0
+        }
 
         started = Date()
         let transcript: String
@@ -55,28 +68,5 @@ enum TranscribeFileCommand {
             }
         }
         return 0
-    }
-
-    private static func loadSamples(path: String) -> [Float]? {
-        guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)),
-              let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioRecorder.sampleRate,
-                                         channels: 1, interleaved: false),
-              let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
-                                           frameCapacity: AVAudioFrameCount(file.length)),
-              (try? file.read(into: input)) != nil,
-              let converter = AVAudioConverter(from: file.processingFormat, to: target) else { return nil }
-        let ratio = target.sampleRate / file.processingFormat.sampleRate
-        let capacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 1024
-        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
-        var consumed = false
-        var error: NSError?
-        converter.convert(to: output, error: &error) { _, status in
-            if consumed { status.pointee = .endOfStream; return nil }
-            consumed = true
-            status.pointee = .haveData
-            return input
-        }
-        guard error == nil, let channel = output.floatChannelData?[0] else { return nil }
-        return Array(UnsafeBufferPointer(start: channel, count: Int(output.frameLength)))
     }
 }

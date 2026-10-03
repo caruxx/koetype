@@ -17,6 +17,7 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
     private var whisperKit: WhisperKit?
     /// Identifies the most recent `load` call; an older call that finishes later is discarded.
     private var generation = 0
+    private let gate = AsyncGate()
 
     /// True while a model is available, even if a later reload failed.
     var isReady: Bool { lock.withLock { whisperKit != nil } }
@@ -57,7 +58,29 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
     }
 
     func transcribe(samples: [Float], hints: String) async throws -> String {
+        try await segments(samples: samples, hints: hints).map(\.text).joined()
+    }
+
+    /// Transcribes a long recording in pieces of about five minutes, cut at quiet moments.
+    /// Dictation requests can run between the pieces. `progress` receives 0...1.
+    func transcribeLong(samples: [Float], hints: String,
+                        progress: @escaping @Sendable (Double) -> Void) async throws -> [SpeechSegment] {
+        let ranges = AudioChunker.ranges(for: samples, sampleRate: 16_000, targetSeconds: 300, searchSeconds: 15)
+        var all: [SpeechSegment] = []
+        for (index, range) in ranges.enumerated() {
+            let offset = Double(range.lowerBound) / 16_000
+            let part = try await segments(samples: Array(samples[range]), hints: hints)
+            all.append(contentsOf: part.map { SpeechSegment(text: $0.text, start: $0.start + offset) })
+            progress(Double(index + 1) / Double(ranges.count))
+        }
+        return all
+    }
+
+    private func segments(samples: [Float], hints: String) async throws -> [SpeechSegment] {
         guard let whisperKit = lock.withLock({ self.whisperKit }) else { throw TranscriberError.notReady }
+        // One decode at a time: the model is shared between dictation and long recordings.
+        await gate.acquire()
+        defer { gate.release() }
         var promptTokens: [Int]?
         if let tokenizer = whisperKit.tokenizer {
             let context = hints.isEmpty ? Self.punctuationPrimer : Self.punctuationPrimer + hints + "。"
@@ -79,11 +102,37 @@ final class WhisperKitTranscriber: Transcribing, ObservableObject, @unchecked Se
         let segments = results.flatMap(\.segments).map {
             SpeechSegment(text: $0.text, start: Double($0.start))
         }
-        return HallucinationFilter.join(segments, speechEnd: Double(samples.count) / 16_000)
+        return HallucinationFilter.spoken(segments, speechEnd: Double(samples.count) / 16_000)
     }
 
     @MainActor private func set(_ newState: State, for loadGeneration: Int) {
         guard lock.withLock({ generation == loadGeneration }) else { return }
         state = newState
+    }
+}
+
+/// Lets one task through at a time, in arrival order.
+final class AsyncGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let proceed: Bool = lock.withLock {
+                if busy { waiters.append(continuation); return false }
+                busy = true
+                return true
+            }
+            if proceed { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let next: CheckedContinuation<Void, Never>? = lock.withLock {
+            if waiters.isEmpty { busy = false; return nil }
+            return waiters.removeFirst()
+        }
+        next?.resume()
     }
 }

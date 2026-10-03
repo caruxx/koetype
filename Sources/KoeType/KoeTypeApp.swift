@@ -16,7 +16,8 @@ struct KoeTypeApp: App {
         MenuBarExtra {
             MenuContent(controller: controller)
         } label: {
-            Image(systemName: controller.isReady ? "mic" : "mic.slash")
+            Image(systemName: controller.recording.isRecording ? "record.circle"
+                  : controller.isReady ? "mic" : "mic.slash")
         }
     }
 }
