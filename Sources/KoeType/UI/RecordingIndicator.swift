@@ -12,7 +12,7 @@ final class RecordingIndicator {
 
     private let model = Model()
     static let panelWidth: CGFloat = 420
-    static let panelHeight: CGFloat = 96
+    static let panelHeight: CGFloat = 84
     private lazy var panel = FloatingPanel(size: NSSize(width: RecordingIndicator.panelWidth,
                                                         height: RecordingIndicator.panelHeight),
                                            content: IndicatorView(model: model))
@@ -48,7 +48,7 @@ private struct IndicatorView: View {
     @ObservedObject var model: RecordingIndicator.Model
 
     /// The pill never changes size, whatever it shows, so nothing on screen jumps.
-    static let pillSize = CGSize(width: 270, height: 64)
+    static let pillSize = CGSize(width: 270, height: 52)
 
     var body: some View {
         content
@@ -84,10 +84,6 @@ private struct IndicatorView: View {
             HStack(spacing: 12) {
                 PulsingDot()
                 VStack(spacing: 2) {
-                    Text("KoeType")
-                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                        .tracking(0.8)
-                        .foregroundStyle(.white.opacity(0.5))
                     Waveform(levels: model.levels.values)
                     Text(caption(handsFree: handsFree))
                         .font(.system(size: 9.5, weight: .regular, design: .rounded))
