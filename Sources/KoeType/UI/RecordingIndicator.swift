@@ -11,7 +11,9 @@ final class RecordingIndicator {
     }
 
     private let model = Model()
-    private lazy var panel = FloatingPanel(size: NSSize(width: 360, height: 44), content: IndicatorView(model: model))
+    static let panelWidth: CGFloat = 520
+    private lazy var panel = FloatingPanel(size: NSSize(width: RecordingIndicator.panelWidth, height: 44),
+                                           content: IndicatorView(model: model))
 
     func set(_ display: IndicatorDisplay) {
         let wasRecording = model.display.isRecording
@@ -71,6 +73,9 @@ private struct IndicatorView: View {
         .background(Capsule().fill(Color.black.opacity(0.85)))
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)))
         .fixedSize()
+        // The window keeps one fixed width and the pill sits in its middle, so the pill
+        // stays centred on screen when its text changes length.
+        .frame(width: RecordingIndicator.panelWidth, height: 44)
     }
 
     /// Tells the user whether their voice is actually reaching the app.

@@ -11,7 +11,7 @@ enum IndicatorPreview {
             MainActor.assumeIsolated {
                 let indicator = RecordingIndicator()
                 Self.indicator = indicator
-                indicator.set(.recording(handsFree: false))
+                indicator.set(.recording(handsFree: CommandLine.arguments.contains("--hands-free")))
                 var tick = 0
                 Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                     MainActor.assumeIsolated {
