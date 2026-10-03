@@ -15,93 +15,105 @@ struct SettingsView: View {
     @State private var testing = false
     @State private var loginMessage = ""
     @State private var accessibilityGranted = Permissions.accessibilityGranted
+    @State private var showAdvanced = false
     @State private var monthlyUsage = AppController.shared.usage.month(containing: Date())
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
-            Section("入力") {
+            Section {
                 Picker("ホットキー", selection: $settings.hotkey) {
                     ForEach(HotkeyChoice.allCases) { Text($0.label).tag($0) }
                 }
                 .onChange(of: settings.hotkey) { controller.reloadHotkey() }
-                Text("押している間だけ録音します。素早く 2 回押すとハンズフリー、もう一度押すと終了します。Esc で取り消します。")
-                    .font(.caption).foregroundStyle(.secondary)
+            } footer: {
+                Text("押している間だけ録音。素早く 2 回押すとハンズフリー、Esc で取り消し。")
+                    .footnoteStyle()
             }
 
-            Section("音声認識") {
-                TextField("モデル名", text: $whisperModelDraft)
-                HStack {
-                    Button("適用") {
-                        settings.whisperModel = whisperModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        controller.reloadModel()
+            Section {
+                Toggle("AI で高精度に整える", isOn: $settings.polishEnabled)
+                // Everything about the AI connection stays hidden until it is switched on.
+                if settings.polishEnabled {
+                    HStack {
+                        SecureField(hasAPIKey ? "API キー（保存済み）" : "OpenAI の API キー", text: $apiKeyDraft)
+                        Button("保存") { saveKey(apiKeyDraft) }
+                            .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        if hasAPIKey { Button("削除") { saveKey("") } }
                     }
-                    Button("既定に戻す") {
-                        whisperModelDraft = AppSettings.defaultWhisperModel
-                        settings.whisperModel = AppSettings.defaultWhisperModel
-                        controller.reloadModel()
+                    HStack {
+                        Button("接続テスト") { runTest() }.disabled(testing)
+                        if testing { ProgressView().controlSize(.small) }
+                        Text(testMessage.isEmpty ? keyMessage : testMessage)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2).textSelection(.enabled)
                     }
-                    Spacer()
-                    Text(modelStateText).foregroundStyle(.secondary)
+                    LabeledContent("今月の利用", value: usageText)
                 }
+            } header: {
+                Text("整形")
+            } footer: {
+                Text(settings.polishEnabled
+                     ? "言い直しの整理、文脈からの誤認識の修正、辞書どおりの表記統一を OpenAI の Luna で行います。利用した分だけ課金されます。"
+                     : "オフの間は Mac の中だけで処理します（無料）。句読点と「えーと」などの除去は行います。精度を上げたいときにオンにすると、OpenAI の Luna に接続できます。")
+                    .footnoteStyle()
             }
 
-            Section("整形") {
-                Picker("整形の方法", selection: $settings.polishEnabled) {
-                    Text("ローカルのみ（無料・Mac 内で完結）").tag(false)
-                    Text("AI で高精度に整える（OpenAI \(settings.polishModel)）").tag(true)
-                }
-                .pickerStyle(.radioGroup)
-                Text("ローカルのみでも、句読点の付与と「えーと」「あのー」などの除去は行います。言い直しの整理や辞書どおりの表記統一まで求める場合は、OpenAI の Luna（gpt-6-luna）に接続すると精度が上がります。接続には下の API キーが必要で、利用した分だけ OpenAI から課金されます。")
-                    .font(.caption).foregroundStyle(.secondary)
-                Stepper(value: $settings.minimumAICharacters, in: 0...200, step: 5) {
-                    Text("AI に送るのは \(settings.minimumAICharacters) 文字以上の発話のみ")
-                }
-                .disabled(!settings.polishEnabled)
-                Text("これより短い発話はローカル処理だけで入力します（速く、費用もかかりません）。0 にするとすべて AI に送ります。")
-                    .font(.caption).foregroundStyle(.secondary)
-                LabeledContent("今月の AI 利用") { Text(usageText) }
-                TextField("モデル ID", text: $settings.polishModel)
-                HStack {
-                    Button("モデル一覧を取得") { fetchModels() }
-                    if !availableModels.isEmpty {
-                        Picker("", selection: $settings.polishModel) {
-                            ForEach(availableModels, id: \.self) { Text($0).tag($0) }
-                        }
-                        .labelsHidden()
-                    }
-                }
-                SecureField(hasAPIKey ? "API キー（保存済み）" : "API キー", text: $apiKeyDraft)
-                HStack {
-                    Button("保存") { saveKey(apiKeyDraft) }
-                        .disabled(apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Button("削除") { saveKey("") }.disabled(!hasAPIKey)
-                    Spacer()
-                    Text(keyMessage).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("接続テスト") { runTest() }.disabled(testing)
-                    if testing { ProgressView().controlSize(.small) }
-                }
-                if !testMessage.isEmpty {
-                    Text(testMessage).font(.caption).textSelection(.enabled)
-                }
-            }
-
-            Section("一般") {
+            Section {
                 Toggle("ログイン時に起動", isOn: Binding(
                     get: { settings.launchAtLogin },
                     set: { setLaunchAtLogin($0) }))
                 if !loginMessage.isEmpty {
                     Text(loginMessage).font(.caption).foregroundStyle(.red)
                 }
-                permissionRow("マイク", granted: controller.microphoneGranted, pane: .microphone)
-                permissionRow("アクセシビリティ", granted: accessibilityGranted, pane: .accessibility)
+                // Permissions take space only while something still needs the user's attention.
+                if controller.microphoneGranted && accessibilityGranted {
+                    LabeledContent("権限", value: "許可済み")
+                } else {
+                    if !controller.microphoneGranted { permissionRow("マイク", pane: .microphone) }
+                    if !accessibilityGranted { permissionRow("アクセシビリティ", pane: .accessibility) }
+                }
+            }
+
+            Section {
+                DisclosureGroup("詳細設定", isExpanded: $showAdvanced) {
+                    Stepper(value: $settings.minimumAICharacters, in: 0...200, step: 5) {
+                        LabeledContent("AI に送る最小の長さ", value: "\(settings.minimumAICharacters) 文字")
+                    }
+                    .disabled(!settings.polishEnabled)
+                    HStack {
+                        TextField("整形モデル", text: $settings.polishModel)
+                        if availableModels.isEmpty {
+                            Button("一覧を取得") { fetchModels() }
+                        } else {
+                            Picker("", selection: $settings.polishModel) {
+                                ForEach(availableModels, id: \.self) { Text($0).tag($0) }
+                            }
+                            .labelsHidden().frame(width: 170)
+                        }
+                    }
+                    TextField("音声認識モデル", text: $whisperModelDraft)
+                    HStack {
+                        Button("適用") {
+                            settings.whisperModel = whisperModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            controller.reloadModel()
+                        }
+                        Button("既定に戻す") {
+                            whisperModelDraft = AppSettings.defaultWhisperModel
+                            settings.whisperModel = AppSettings.defaultWhisperModel
+                            settings.polishModel = AppSettings.defaultPolishModel
+                            settings.minimumAICharacters = AppSettings.defaultMinimumAICharacters
+                            controller.reloadModel()
+                        }
+                        Spacer()
+                        Text(modelStateText).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 520, minHeight: 560)
+        .frame(minWidth: 480, minHeight: 380)
         .onReceive(timer) { _ in
             accessibilityGranted = Permissions.accessibilityGranted
             controller.refreshPermissions()
@@ -118,7 +130,7 @@ struct SettingsView: View {
             inputDollarsPerMillion: AppSettings.estimateInputDollarsPerMillion,
             outputDollarsPerMillion: AppSettings.estimateOutputDollarsPerMillion,
             yenPerDollar: AppSettings.estimateYenPerDollar)
-        return String(format: "%d 回 / 推定 約 %.0f 円（gpt-6-luna の定価で計算した目安）", monthlyUsage.requests, yen)
+        return String(format: "%d 回・約 %.0f 円（目安）", monthlyUsage.requests, yen)
     }
 
     private var modelStateText: String {
@@ -131,11 +143,11 @@ struct SettingsView: View {
         }
     }
 
-    private func permissionRow(_ name: String, granted: Bool, pane: Permissions.Pane) -> some View {
+    private func permissionRow(_ name: String, pane: Permissions.Pane) -> some View {
         HStack {
             Text(name)
             Spacer()
-            Text(granted ? "許可済み" : "未許可").foregroundStyle(granted ? Color.secondary : Color.red)
+            Text("未許可").foregroundStyle(.red)
             Button("設定を開く") { Permissions.openSettings(pane) }
         }
     }
@@ -200,5 +212,13 @@ struct SettingsView: View {
         case .badResponse: return "応答を解釈できませんでした"
         case nil: return "通信できませんでした"
         }
+    }
+}
+
+private extension Text {
+    /// Section footers read as left-aligned notes under the group they explain.
+    func footnoteStyle() -> some View {
+        self.multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

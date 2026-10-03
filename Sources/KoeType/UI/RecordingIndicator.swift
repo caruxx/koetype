@@ -11,8 +11,8 @@ final class RecordingIndicator {
     }
 
     private let model = Model()
-    static let panelWidth: CGFloat = 520
-    static let panelHeight: CGFloat = 76
+    static let panelWidth: CGFloat = 420
+    static let panelHeight: CGFloat = 84
     private lazy var panel = FloatingPanel(size: NSSize(width: RecordingIndicator.panelWidth,
                                                         height: RecordingIndicator.panelHeight),
                                            content: IndicatorView(model: model))
@@ -48,11 +48,11 @@ private struct IndicatorView: View {
     @ObservedObject var model: RecordingIndicator.Model
 
     /// The pill never changes size, whatever it shows, so nothing on screen jumps.
-    static let pillSize = CGSize(width: 400, height: 46)
+    static let pillSize = CGSize(width: 270, height: 52)
 
     var body: some View {
         content
-            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+            .font(.system(size: 11.5, weight: .medium, design: .rounded))
             .foregroundStyle(.white)
             .padding(.horizontal, 18)
             .frame(width: Self.pillSize.width, height: Self.pillSize.height)
@@ -83,16 +83,20 @@ private struct IndicatorView: View {
         case .recording(let handsFree):
             HStack(spacing: 12) {
                 PulsingDot()
-                Waveform(levels: model.levels.values)
+                VStack(spacing: 2) {
+                    Waveform(levels: model.levels.values)
+                    Text(caption(handsFree: handsFree))
+                        .font(.system(size: 9.5, weight: .regular, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
                 TimelineView(.periodic(from: .now, by: 0.5)) { context in
                     Text(Self.elapsed(from: model.startedAt, to: context.date))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
                         .monospacedDigit()
-                        .frame(width: 34, alignment: .trailing)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 30, alignment: .trailing)
                 }
-                Text(caption(handsFree: handsFree))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
-                    .frame(width: 116, alignment: .leading)
             }
         case .working(let stage):
             HStack(spacing: 10) {
@@ -132,12 +136,12 @@ private struct Waveform: View {
                         colors: voiced ? [Color(red: 0.62, green: 0.90, blue: 1.0), .white]
                                        : [Color.white.opacity(0.35), Color.white.opacity(0.35)],
                         startPoint: .bottom, endPoint: .top))
-                    .frame(width: 2.5, height: 3 + 23 * level)
+                    .frame(width: 2.5, height: 3 + 19 * level)
                     // Older bars fade out toward the left edge.
                     .opacity(0.6 + 0.4 * Double(index) / Double(max(1, levels.count - 1)))
             }
         }
-        .frame(height: 28)
+        .frame(height: 24)
         .animation(.linear(duration: 0.05), value: levels)
     }
 }
