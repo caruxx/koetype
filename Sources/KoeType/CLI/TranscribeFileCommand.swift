@@ -41,7 +41,10 @@ enum TranscribeFileCommand {
 
         if arguments.contains("--polish"), !raw.isEmpty {
             let polishModel = UserDefaults.standard.string(forKey: "polishModel") ?? AppSettings.defaultPolishModel
-            let polisher = OpenAIPolisher(apiKey: { KeychainStore.readAPIKey() }, model: { polishModel })
+            let polisher: Polishing = arguments.contains("--codex")
+                ? CodexPolisher(executable: { AppSettings.codexPath }, model: { AppSettings.defaultCodexModel },
+                                runner: ProcessRunner())
+                : OpenAIPolisher(apiKey: { KeychainStore.readAPIKey() }, model: { polishModel })
             started = Date()
             do {
                 let polished = try await polisher.polish(raw: raw, dictionary: [])

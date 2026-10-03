@@ -1,12 +1,29 @@
+/// What the accessibility API reports about the element that has keyboard focus.
 public struct FocusSnapshot: Equatable, Sendable {
+    /// AXRole of the focused element; nil when nothing has focus.
     public var role: String?
     public var hasSelectedTextRange: Bool
-    public init(role: String?, hasSelectedTextRange: Bool) {
+    /// The element accepts typed text (its value or selection can be set).
+    public var isEditable: Bool
+    /// Number of characters currently in the element, when it can be read.
+    public var valueLength: Int?
+
+    public init(role: String?, hasSelectedTextRange: Bool, isEditable: Bool = false, valueLength: Int? = nil) {
         self.role = role; self.hasSelectedTextRange = hasSelectedTextRange
+        self.isEditable = isEditable; self.valueLength = valueLength
     }
 }
 
-public enum InsertionPlan: Equatable, Sendable { case pasteOnly, copyBoxOnly, pasteAndCopyBox }
+public enum InsertionPlan: Equatable, Sendable {
+    /// Paste and trust it.
+    case pasteOnly
+    /// Paste, then confirm the field's content changed; show the copy box if it did not.
+    case pasteThenVerify
+    /// Nothing can receive text: show the copy box.
+    case copyBoxOnly
+    /// Cannot tell: paste and also show the copy box.
+    case pasteAndCopyBox
+}
 
 public enum InsertionDecision {
     static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
@@ -15,12 +32,21 @@ public enum InsertionDecision {
         "AXMenuItem", "AXMenuBarItem", "AXCheckBox", "AXRadioButton", "AXToolbar",
     ]
 
+    /// `snapshot` is nil when the accessibility query itself failed.
     public static func plan(for snapshot: FocusSnapshot?) -> InsertionPlan {
         guard let snapshot else { return .pasteAndCopyBox }
-        if snapshot.hasSelectedTextRange { return .pasteOnly }
         guard let role = snapshot.role else { return .copyBoxOnly }
-        if textRoles.contains(role) { return .pasteOnly }
+        let looksLikeText = snapshot.isEditable || snapshot.hasSelectedTextRange || textRoles.contains(role)
+        // A readable value is the only way to know afterwards whether the paste landed.
+        if looksLikeText, snapshot.valueLength != nil { return .pasteThenVerify }
+        if snapshot.isEditable { return .pasteOnly }
         if nonTextRoles.contains(role) { return .copyBoxOnly }
         return .pasteAndCopyBox
+    }
+
+    /// The paste reached the field if its content length is different afterwards.
+    public static func didInsert(lengthBefore: Int, lengthAfter: Int?) -> Bool {
+        guard let lengthAfter else { return false }
+        return lengthAfter != lengthBefore
     }
 }

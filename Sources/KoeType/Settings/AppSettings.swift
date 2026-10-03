@@ -52,6 +52,14 @@ final class AppSettings: ObservableObject {
     /// OpenAI's most economical model; confirmed against the official model page on 2026-10-03.
     static let defaultPolishModel = "gpt-6-luna"
     static let defaultMinimumAICharacters = 20
+    /// Models the Codex CLI accepts with a ChatGPT plan differ from the API; measured on 2026-10-03.
+    static let defaultCodexModel = "gpt-5.6-luna"
+    /// The Codex CLI is installed by npm or Homebrew depending on the machine; use the first one found.
+    static var codexPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(home)/.npm-global/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? candidates[0]
+    }
     /// Published list price of the default model, used only for the cost estimate shown in settings.
     static let estimateInputDollarsPerMillion = 0.10
     static let estimateOutputDollarsPerMillion = 0.50
@@ -67,6 +75,9 @@ final class AppSettings: ObservableObject {
     @Published var minimumAICharacters: Int {
         didSet { defaults.set(minimumAICharacters, forKey: "minimumAICharacters") }
     }
+    /// Send AI polishing through the Codex CLI (ChatGPT plan) instead of the OpenAI API.
+    @Published var polishViaCodex: Bool { didSet { defaults.set(polishViaCodex, forKey: "polishViaCodex") } }
+    @Published var codexModel: String { didSet { defaults.set(codexModel, forKey: "codexModel") } }
     @Published var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: "launchAtLogin") } }
 
     private init() {
@@ -76,6 +87,8 @@ final class AppSettings: ObservableObject {
         polishEnabled = defaults.object(forKey: "polishEnabled") as? Bool ?? false
         minimumAICharacters = defaults.object(forKey: "minimumAICharacters") as? Int ?? Self.defaultMinimumAICharacters
         polishModel = defaults.string(forKey: "polishModel") ?? Self.defaultPolishModel
+        polishViaCodex = defaults.bool(forKey: "polishViaCodex")
+        codexModel = defaults.string(forKey: "codexModel") ?? Self.defaultCodexModel
         launchAtLogin = defaults.bool(forKey: "launchAtLogin")
     }
 }

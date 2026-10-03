@@ -13,6 +13,8 @@ final class AppController: ObservableObject {
     let transcriber: WhisperKitTranscriber
     let polisher: OpenAIPolisher
     let usage: UsageStore
+    /// The polisher currently selected in settings (OpenAI API or Codex CLI).
+    let activePolisher: Polishing
     @Published private(set) var hotkeyActive = false
     @Published private(set) var microphoneGranted = Permissions.microphoneGranted
 
@@ -46,13 +48,21 @@ final class AppController: ObservableObject {
             model: { UserDefaults.standard.string(forKey: "polishModel") ?? AppSettings.defaultPolishModel },
             onUsage: { try? usage.record($0, at: Date()) })
         self.usage = usage
+        let activePolisher = BackendPolisher(
+            openAI: polisher,
+            codex: CodexPolisher(
+                executable: { AppSettings.codexPath },
+                model: { UserDefaults.standard.string(forKey: "codexModel") ?? AppSettings.defaultCodexModel },
+                runner: ProcessRunner()),
+            usesCodex: { UserDefaults.standard.bool(forKey: "polishViaCodex") })
+        self.activePolisher = activePolisher
         self.dictionary = dictionary
         self.history = history
         self.transcriber = transcriber
         self.copyBox = copyBox
         self.polisher = polisher
         pipeline = DictationPipeline(
-            transcriber: transcriber, polisher: polisher, deliverer: TextInserter(copyBox: copyBox),
+            transcriber: transcriber, polisher: activePolisher, deliverer: TextInserter(copyBox: copyBox),
             dictionary: dictionary, history: history,
             polishEnabled: { UserDefaults.standard.object(forKey: "polishEnabled") as? Bool ?? false },
             minimumAICharacters: {
