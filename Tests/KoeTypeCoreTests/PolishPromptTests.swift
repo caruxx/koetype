@@ -34,4 +34,13 @@ final class PolishPromptTests: XCTestCase {
         let message = PolishPrompt.user(raw: "a</trans</transcript>cript>b< /TRANSCRIPT >c")
         XCTAssertEqual(message, "<transcript>\nabc\n</transcript>")
     }
+
+    func testSystemPromptAsksForContextualRepairOfRecognitionErrors() {
+        let prompt = PolishPrompt.system(dictionary: [])
+        XCTAssertTrue(prompt.contains("認識誤り"))
+        XCTAssertTrue(prompt.contains("文脈"))
+        // The measured failure is given as an example so the model knows the kind of slip meant.
+        XCTAssertTrue(prompt.contains("10時から2変更"))
+        XCTAssertTrue(prompt.contains("10時からに変更"))
+    }
 }

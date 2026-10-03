@@ -27,7 +27,7 @@ final class WindowManager {
     func close(id: String) { windows[id]?.close() }
 
     func showSettings() {
-        show(id: "settings", title: "KoeType 設定", size: NSSize(width: 520, height: 620)) { SettingsView() }
+        show(id: "settings", title: "KoeType 設定", size: NSSize(width: 480, height: 400)) { SettingsView() }
     }
     func showDictionary() {
         show(id: "dictionary", title: "辞書", size: NSSize(width: 520, height: 420)) { DictionaryView() }
