@@ -7,10 +7,14 @@ public struct FocusSnapshot: Equatable, Sendable {
     public var isEditable: Bool
     /// Number of characters currently in the element, when it can be read.
     public var valueLength: Int?
+    /// The frontmost app has a focused window, even if it does not say which element in it has focus.
+    public var appHasFocusedWindow: Bool
 
-    public init(role: String?, hasSelectedTextRange: Bool, isEditable: Bool = false, valueLength: Int? = nil) {
+    public init(role: String?, hasSelectedTextRange: Bool, isEditable: Bool = false, valueLength: Int? = nil,
+                appHasFocusedWindow: Bool = false) {
         self.role = role; self.hasSelectedTextRange = hasSelectedTextRange
         self.isEditable = isEditable; self.valueLength = valueLength
+        self.appHasFocusedWindow = appHasFocusedWindow
     }
 }
 
@@ -35,7 +39,12 @@ public enum InsertionDecision {
     /// `snapshot` is nil when the accessibility query itself failed.
     public static func plan(for snapshot: FocusSnapshot?) -> InsertionPlan {
         guard let snapshot else { return .pasteAndCopyBox }
-        guard let role = snapshot.role else { return .copyBoxOnly }
+        guard let role = snapshot.role else {
+            // Some apps (Electron, web views) do not report their focused element reliably.
+            // With a window in front the cursor may well be in a text field, so paste anyway
+            // and keep the copy box as the safety net.
+            return snapshot.appHasFocusedWindow ? .pasteAndCopyBox : .copyBoxOnly
+        }
         let looksLikeText = snapshot.isEditable || snapshot.hasSelectedTextRange || textRoles.contains(role)
         // A readable value is the only way to know afterwards whether the paste landed.
         if looksLikeText, snapshot.valueLength != nil { return .pasteThenVerify }

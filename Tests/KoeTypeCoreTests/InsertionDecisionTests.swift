@@ -10,8 +10,15 @@ final class InsertionDecisionTests: XCTestCase {
         XCTAssertEqual(InsertionDecision.plan(for: nil), .pasteAndCopyBox)
     }
 
-    func testNoFocusedElementShowsCopyBoxOnly() {
+    func testNoFocusedElementAndNoWindowShowsCopyBoxOnly() {
         XCTAssertEqual(InsertionDecision.plan(for: snapshot(role: nil)), .copyBoxOnly)
+    }
+
+    func testAppThatHidesItsFocusStillGetsThePaste() {
+        // Measured in the ChatGPT app: with the cursor in the message field, 10 of 26 queries
+        // answered "no focused element". Showing only the copy box lost the insertion.
+        let hidden = FocusSnapshot(role: nil, hasSelectedTextRange: false, appHasFocusedWindow: true)
+        XCTAssertEqual(InsertionDecision.plan(for: hidden), .pasteAndCopyBox)
     }
 
     func testReadableTextValueIsPastedAndThenVerified() {
