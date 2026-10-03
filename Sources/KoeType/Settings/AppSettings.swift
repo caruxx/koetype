@@ -25,12 +25,13 @@ enum HotkeyChoice: String, CaseIterable, Identifiable {
         }
     }
 
-    var flag: CGEventFlags {
+    /// Bit in the raw event flags that is set only while this key itself is down.
+    var deviceMask: UInt64 {
         switch self {
-        case .rightOption: return .maskAlternate
-        case .rightCommand: return .maskCommand
-        case .rightControl: return .maskControl
-        case .fn: return .maskSecondaryFn
+        case .rightOption: return 0x40
+        case .rightCommand: return 0x10
+        case .rightControl: return 0x2000
+        case .fn: return 0x800000
         }
     }
 

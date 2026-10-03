@@ -24,6 +24,10 @@ final class AppController: ObservableObject {
     /// Recordings handed to the pipeline that have not finished yet.
     private var pending = 0
     private var observers: Set<AnyCancellable> = []
+    /// Shows the recording indicator or a refusal shortly after the key goes down.
+    /// A plain shortcut (trigger + another key) cancels it before anything appears.
+    private var delayedIndicator: Task<Void, Never>?
+    private static let indicatorDelay: UInt64 = 200_000_000
 
     private init() {
         let dictionary = DictionaryStore(fileURL: AppPaths.dictionaryFile)
@@ -73,6 +77,7 @@ final class AppController: ObservableObject {
         }
         monitor.onInput = { [weak self] input, time in
             guard let self else { return }
+            if input == .otherKeyDown || input == .triggerUp { self.delayedIndicator?.cancel() }
             for action in self.machine.handle(input, at: time) { self.perform(action) }
         }
         Task {
@@ -107,16 +112,22 @@ final class AppController: ObservableObject {
             guard Permissions.microphoneGranted else { return refuse("マイクの使用が許可されていません") }
             do {
                 try recorder.start()
-                indicator.set(.recording(handsFree: false))
+                showDelayed { [weak self] in
+                    guard let self, self.recorder.isRecording else { return }
+                    self.indicator.set(.recording(handsFree: self.machine.isHandsFree))
+                }
             } catch {
                 refuse("マイクを開始できませんでした")
             }
         case .enterHandsFree:
+            delayedIndicator?.cancel()
             if recorder.isRecording { indicator.set(.recording(handsFree: true)) }
         case .cancelRecording:
+            delayedIndicator?.cancel()
             recorder.cancel()
             showIdleOrProcessing()
         case .stopAndProcess:
+            delayedIndicator?.cancel()
             guard recorder.isRecording else { return }
             let (samples, seconds) = recorder.stop()
             guard seconds >= 0.3 else { return showIdleOrProcessing() }
@@ -128,7 +139,16 @@ final class AppController: ObservableObject {
 
     private func refuse(_ message: String) {
         machine.reset()
-        indicator.set(.message(message))
+        showDelayed { [weak self] in self?.indicator.set(.message(message)) }
+    }
+
+    private func showDelayed(_ show: @escaping @MainActor () -> Void) {
+        delayedIndicator?.cancel()
+        delayedIndicator = Task {
+            try? await Task.sleep(nanoseconds: Self.indicatorDelay)
+            guard !Task.isCancelled else { return }
+            show()
+        }
     }
 
     private func showIdleOrProcessing() {
