@@ -13,9 +13,7 @@ struct KoeTypeApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            Text(controller.statusText)
-            Divider()
-            Button("終了") { NSApplication.shared.terminate(nil) }
+            MenuContent(controller: controller)
         } label: {
             Image(systemName: controller.isReady ? "mic" : "mic.slash")
         }
