@@ -1,0 +1,41 @@
+import AppKit
+import SwiftUI
+
+/// Opens the app's ordinary windows. A menu bar app has no Dock icon, so each window
+/// is created on demand and the app is activated explicitly to bring it to the front.
+@MainActor
+final class WindowManager {
+    static let shared = WindowManager()
+    private var windows: [String: NSWindow] = [:]
+
+    func show<Content: View>(id: String, title: String, size: NSSize, @ViewBuilder content: () -> Content) {
+        if windows[id] == nil {
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                  backing: .buffered, defer: false)
+            window.title = title
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: content())
+            window.setContentSize(size)
+            window.center()
+            windows[id] = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        windows[id]?.makeKeyAndOrderFront(nil)
+    }
+
+    func close(id: String) { windows[id]?.close() }
+
+    func showSettings() {
+        show(id: "settings", title: "KoeType 設定", size: NSSize(width: 520, height: 620)) { SettingsView() }
+    }
+    func showDictionary() {
+        show(id: "dictionary", title: "辞書", size: NSSize(width: 520, height: 420)) { DictionaryView() }
+    }
+    func showHistory() {
+        show(id: "history", title: "履歴", size: NSSize(width: 640, height: 480)) { HistoryView() }
+    }
+    func showOnboarding() {
+        show(id: "onboarding", title: "KoeType へようこそ", size: NSSize(width: 460, height: 300)) { OnboardingView() }
+    }
+}

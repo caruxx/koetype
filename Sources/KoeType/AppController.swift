@@ -81,6 +81,9 @@ final class AppController: ObservableObject {
         }
         reloadHotkey()
         reloadModel()
+        if !Permissions.microphoneGranted || !Permissions.accessibilityGranted {
+            WindowManager.shared.showOnboarding()
+        }
     }
 
     func reloadHotkey() {
