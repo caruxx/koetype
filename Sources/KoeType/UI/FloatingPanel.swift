@@ -9,7 +9,7 @@ final class FloatingPanel: NSPanel {
         level = .statusBar
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false   // content draws its own outline; a window shadow would trace the invisible frame
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
