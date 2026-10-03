@@ -6,6 +6,8 @@
 	<string>KoeType</string>
 	<key>CFBundleExecutable</key>
 	<string>KoeType</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>jp.caruvistar.koetype</string>
 	<key>CFBundleName</key>

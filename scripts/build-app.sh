@@ -15,6 +15,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/KoeType" "$APP/Contents/MacOS/KoeType"
 cp "$ROOT/Support/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Support/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 find "$BIN" -maxdepth 1 -name "*.bundle" -exec cp -R {} "$APP/Contents/Resources/" \;
 
 codesign --force --sign "$IDENTITY" --identifier jp.caruvistar.koetype "$APP"
