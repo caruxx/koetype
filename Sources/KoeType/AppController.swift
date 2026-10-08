@@ -10,6 +10,7 @@ final class AppController: ObservableObject {
     let settings = AppSettings.shared
     let dictionary: DictionaryStore
     let history: HistoryStore
+    let latestDelivery: LatestDeliveryMemory
     let transcriber: WhisperKitTranscriber
     let polisher: OpenAIPolisher
     let usage: UsageStore
@@ -36,12 +37,14 @@ final class AppController: ObservableObject {
     /// True once the recording indicator has been allowed on screen for the current recording.
     private var recordingShown = false
     private var message: String?
+    private var noticeState = DeliveryNoticeState()
     private var messageTask: Task<Void, Never>?
     private var stage: IndicatorStage = .transcribing
 
     private init() {
         let dictionary = DictionaryStore(fileURL: AppPaths.dictionaryFile)
         let history = HistoryStore(fileURL: AppPaths.historyFile)
+        let latestDelivery = LatestDeliveryMemory()
         let transcriber = WhisperKitTranscriber()
         let copyBox = CopyBoxPanel()
         let usage = UsageStore(fileURL: AppPaths.usageFile)
@@ -62,11 +65,13 @@ final class AppController: ObservableObject {
         recording = RecordingSession(transcriber: transcriber, dictionary: dictionary)
         self.dictionary = dictionary
         self.history = history
+        self.latestDelivery = latestDelivery
         self.transcriber = transcriber
         self.copyBox = copyBox
         self.polisher = polisher
         pipeline = DictationPipeline(
-            transcriber: transcriber, polisher: activePolisher, deliverer: TextInserter(copyBox: copyBox),
+            transcriber: transcriber, polisher: activePolisher,
+            deliverer: TextInserter(copyBox: copyBox, latestDelivery: latestDelivery),
             dictionary: dictionary, history: history,
             polishEnabled: { UserDefaults.standard.object(forKey: "polishEnabled") as? Bool ?? false },
             minimumAICharacters: {
@@ -210,12 +215,19 @@ final class AppController: ObservableObject {
 
     /// Keeps a message on screen for two seconds even while other recordings are being processed.
     private func show(message text: String) {
-        message = text
+        let notice = DeliveryPresentation.Notice(text: text, isWarning: false)
+        noticeState.present(notice)
+        display(notice)
+    }
+
+    private func display(_ notice: DeliveryPresentation.Notice) {
+        message = notice.text
         messageTask?.cancel()
         messageTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled else { return }
             self?.message = nil
+            self?.noticeState.clear()
             self?.refreshIndicator()
         }
         refreshIndicator()
@@ -239,15 +251,15 @@ final class AppController: ObservableObject {
             stage = .polishing
         case .delivered:
             pending = max(0, pending - 1)
+            objectWillChange.send() // the latest in-memory delivery can change even if history saving failed
         case .nothingHeard:
             pending = max(0, pending - 1)
-            show(message: "聞き取れませんでした")
-        case .failed(let text):
+        case .failed:
             pending = max(0, pending - 1)
-            show(message: text)
-        case .warning(let text):
-            show(message: text)
+        case .warning:
+            break
         }
+        if let notice = noticeState.advance(status) { display(notice) }
         refreshIndicator()
     }
 }

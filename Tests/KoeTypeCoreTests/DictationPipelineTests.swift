@@ -32,9 +32,11 @@ private final class FakePolisher: Polishing, @unchecked Sendable {
 
 private final class FakeDeliverer: TextDelivering, @unchecked Sendable {
     var outcome: DeliveryOutcome = .inserted
+    var latestMemory: LatestDeliveryMemory?
     private(set) var delivered: [String] = []
     func deliver(_ text: String) async -> DeliveryResult {
         delivered.append(text)
+        latestMemory?.remember(text)
         return DeliveryResult(outcome: outcome, appName: "メモ")
     }
 }
@@ -111,6 +113,25 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(log.all.last, .delivered(.copyBox, polished: false))
     }
 
+    func testUnverifiedDeliveryStaysUnverifiedInHistoryAndStatus() async {
+        polishEnabled = false
+        transcriber.results = [.success("短い文")]
+        deliverer.outcome = .unverified
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered, ["短い文"])
+        XCTAssertEqual(history.items.first?.outcome, .unverified)
+        XCTAssertEqual(log.all.last, .delivered(.unverified, polished: false))
+    }
+
+    func testPreflightFailureStaysNotPastedInHistoryAndStatus() async {
+        polishEnabled = false
+        transcriber.results = [.success("短い文")]
+        deliverer.outcome = .notPasted
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(history.items.first?.outcome, .notPasted)
+        XCTAssertEqual(log.all.last, .delivered(.notPasted, polished: false))
+    }
+
     func testRejectedPolishResultFallsBackToRaw() async {
         transcriber.results = [.success("はい")]
         polisher.handler = { _ in "はい、承知しました。ご質問にお答えします。明日の天気は晴れです。" }
@@ -167,6 +188,9 @@ final class DictationPipelineTests: XCTestCase {
     }
 
     func testHistorySaveFailureIsReportedButTextIsStillDelivered() async throws {
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        deliverer.outcome = .unverified
         let url = dir.appendingPathComponent("history.json")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data("[]".utf8).write(to: url)
@@ -179,8 +203,89 @@ final class DictationPipelineTests: XCTestCase {
         await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
 
         XCTAssertEqual(deliverer.delivered, ["明日は休みです"])
+        XCTAssertTrue(history.items.isEmpty)
+        XCTAssertEqual(memory.latestText, "明日は休みです")
+        var copied: [String] = []
+        DeliveryPresentation.copyLatest(from: memory) { copied.append($0) }
+        XCTAssertEqual(copied, ["明日は休みです"])
         XCTAssertEqual(log.all, [.transcribing, .warning("履歴を保存できませんでした"),
-                                 .delivered(.inserted, polished: false)])
+                                 .delivered(.unverified, polished: false)])
+        XCTAssertNil(DeliveryPresentation.indicatorMessage(outcome: .unverified, blockingWarning: true))
+    }
+
+    func testHistorySaveFailureWithOlderItemStillCopiesCurrentNotPastedText() async throws {
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        deliverer.outcome = .notPasted
+        let url = dir.appendingPathComponent("history.json")
+        history = HistoryStore(fileURL: url)
+        try history.append(HistoryItem(date: Date(timeIntervalSince1970: 1), rawText: "old",
+                                       finalText: "old", appName: nil, outcome: .inserted,
+                                       polished: false, durationSeconds: 1))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+        polishEnabled = false
+        transcriber.results = [.success("new")]
+
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+
+        XCTAssertEqual(history.items.first?.finalText, "old")
+        XCTAssertEqual(memory.latestText, "new")
+        var copied: [String] = []
+        DeliveryPresentation.copyLatest(from: memory) { copied.append($0) }
+        XCTAssertEqual(copied, ["new"])
+        XCTAssertEqual(log.all, [.transcribing, .warning("履歴を保存できませんでした"),
+                                 .delivered(.notPasted, polished: false)])
+        XCTAssertNil(DeliveryPresentation.indicatorMessage(outcome: .notPasted, blockingWarning: true))
+    }
+
+    func testHistorySaveFailureWithoutOlderItemStillCopiesCurrentNotPastedText() async throws {
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        deliverer.outcome = .notPasted
+        let url = dir.appendingPathComponent("history.json")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("[]".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        history = HistoryStore(fileURL: url)
+        polishEnabled = false
+        transcriber.results = [.success("new")]
+
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+
+        XCTAssertTrue(history.items.isEmpty)
+        var copied: [String] = []
+        DeliveryPresentation.copyLatest(from: memory) { copied.append($0) }
+        XCTAssertEqual(copied, ["new"])
+        XCTAssertEqual(log.all, [.transcribing, .warning("履歴を保存できませんでした"),
+                                 .delivered(.notPasted, polished: false)])
+        XCTAssertNil(DeliveryPresentation.indicatorMessage(outcome: .notPasted, blockingWarning: true))
+    }
+
+    func testHistorySaveFailureWithOlderItemStillCopiesCurrentUnverifiedText() async throws {
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        deliverer.outcome = .unverified
+        let url = dir.appendingPathComponent("history.json")
+        history = HistoryStore(fileURL: url)
+        try history.append(HistoryItem(date: Date(timeIntervalSince1970: 1), rawText: "old",
+                                       finalText: "old", appName: nil, outcome: .inserted,
+                                       polished: false, durationSeconds: 1))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+        polishEnabled = false
+        transcriber.results = [.success("new")]
+
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+
+        XCTAssertEqual(history.items.first?.finalText, "old")
+        var copied: [String] = []
+        DeliveryPresentation.copyLatest(from: memory) { copied.append($0) }
+        XCTAssertEqual(copied, ["new"])
+        XCTAssertEqual(log.all, [.transcribing, .warning("履歴を保存できませんでした"),
+                                 .delivered(.unverified, polished: false)])
+        XCTAssertNil(DeliveryPresentation.indicatorMessage(outcome: .unverified, blockingWarning: true))
     }
 
     func testShortUtteranceIsFinishedLocallyWithoutAI() async {

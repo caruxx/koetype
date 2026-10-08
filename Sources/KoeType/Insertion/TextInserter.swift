@@ -4,7 +4,11 @@ import KoeTypeCore
 
 final class TextInserter: TextDelivering, @unchecked Sendable {
     private let copyBox: CopyBoxPanel
-    init(copyBox: CopyBoxPanel) { self.copyBox = copyBox }
+    private let latestDelivery: LatestDeliveryMemory
+    init(copyBox: CopyBoxPanel, latestDelivery: LatestDeliveryMemory) {
+        self.copyBox = copyBox
+        self.latestDelivery = latestDelivery
+    }
 
     func deliver(_ text: String) async -> DeliveryResult {
         await deliverOnMain(text)
@@ -13,40 +17,58 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
     @MainActor private func deliverOnMain(_ text: String) async -> DeliveryResult {
         let focus = await FocusInspector.inspect()
         let plan = InsertionDecision.plan(for: focus.snapshot)
-        let outcome: DeliveryOutcome
-        var verified: Bool?
+        var verification: InsertionVerification.Result?
+        var didPaste = false
         switch plan {
         case .copyBoxOnly:
-            copyBox.show(text: text)
-            outcome = .copyBox
-        case .pasteOnly:
-            let restore = paste(text)
-            await pause(Self.settleSeconds)
-            restore()
-            outcome = .inserted
-        case .pasteAndCopyBox:
-            let restore = paste(text)
-            copyBox.show(text: text)
-            await pause(Self.settleSeconds)
-            restore()
-            outcome = .insertedAndCopyBox
-        case .pasteThenVerify:
-            let before = focus.snapshot?.valueLength ?? 0
-            let restore = paste(text)
-            var inserted = false
-            // Slow apps take a few hundred milliseconds to act on the paste.
-            for _ in 0..<10 where !inserted {
-                await pause(0.1)
-                inserted = InsertionDecision.didInsert(
-                    lengthBefore: before, lengthAfter: focus.element.flatMap(FocusInspector.length(of:)))
+            break
+        case .pasteOnly, .pasteAndCopyBox:
+            if let restore = paste(text) {
+                didPaste = true
+                await pause(Self.settleSeconds)
+                restore()
+            } else {
+                verification = .dispatchFailed
             }
-            if !inserted { copyBox.show(text: text) }
-            await pause(0.2)
-            restore()
-            verified = inserted
-            outcome = inserted ? .inserted : .copyBox
+        case .pasteThenVerify:
+            var restore: (() -> Void)?
+            var pastedAt: Double?
+            if let element = focus.element,
+               let before = FocusInspector.value(of: element),
+               let selection = FocusInspector.selection(of: element) {
+                let attempt = await InsertionVerification.pasteAndVerify(
+                    valueBefore: before, selection: selection, insertedText: text,
+                    paste: {
+                        restore = paste(text)
+                        if restore != nil { pastedAt = ProcessInfo.processInfo.systemUptime }
+                        return restore != nil
+                    },
+                    observe: { FocusInspector.verificationSample(for: focus) })
+                verification = attempt.result
+                didPaste = attempt.didPaste
+            } else {
+                // A character count without AXValue and a selection cannot confirm where text landed.
+                restore = paste(text)
+                didPaste = restore != nil
+                if didPaste { pastedAt = ProcessInfo.processInfo.systemUptime }
+                verification = didPaste ? .unverified : .dispatchFailed
+            }
+            if didPaste {
+                if let pastedAt {
+                    await pause(ClipboardRestorePolicy.remainingHoldSeconds(
+                        pastedAt: pastedAt, now: ProcessInfo.processInfo.systemUptime,
+                        minimum: Self.settleSeconds))
+                }
+                restore?()
+            }
         }
-        InsertionLog.record(app: focus.appName, snapshot: focus.snapshot, plan: plan, verified: verified)
+        let outcome = DeliveryPresentation.outcome(plan: plan, didPaste: didPaste, verification: verification)
+        if let message = DeliveryPresentation.copyBoxMessage(outcome: outcome, verification: verification) {
+            copyBox.show(text: text, message: message)
+        }
+        InsertionLog.record(app: focus.appName, snapshot: focus.snapshot, plan: plan,
+                            verification: verification, outcome: outcome)
+        latestDelivery.remember(text)
         return DeliveryResult(outcome: outcome, appName: focus.appName)
     }
 
@@ -60,7 +82,13 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
 
     /// Puts the text on the clipboard and sends the paste shortcut.
     /// Returns a closure that puts the previous clipboard content back.
-    @MainActor private func paste(_ text: String) -> () -> Void {
+    @MainActor private func paste(_ text: String) -> (() -> Void)? {
+        // If the paste events cannot be created, leave the user's clipboard untouched.
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: Self.pasteKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: Self.pasteKeyCode, keyDown: false) else {
+            return nil
+        }
         let pasteboard = NSPasteboard.general
         // Keep every type of every item so images and files survive, not only strings.
         let saved: [[(NSPasteboard.PasteboardType, Data)]] = (pasteboard.pasteboardItems ?? []).map { item in
@@ -72,12 +100,10 @@ final class TextInserter: TextDelivering, @unchecked Sendable {
         pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         let ourChangeCount = pasteboard.changeCount
 
-        let source = CGEventSource(stateID: .combinedSessionState)
-        for keyDown in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: Self.pasteKeyCode, keyDown: keyDown)
-            event?.flags = .maskCommand   // explicit: ignore a trigger key the user may be holding again
-            event?.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.syntheticEventTag)
-            event?.post(tap: .cghidEventTap)
+        for event in [keyDown, keyUp] {
+            event.flags = .maskCommand   // explicit: ignore a trigger key the user may be holding again
+            event.setIntegerValueField(.eventSourceUserData, value: HotkeyMonitor.syntheticEventTag)
+            event.post(tap: .cghidEventTap)
         }
 
         return {

@@ -63,6 +63,8 @@ struct HistoryView: View {
         case .inserted: outcome = "挿入"
         case .copyBox: outcome = "コピーボックス"
         case .insertedAndCopyBox: outcome = "挿入 + コピーボックス"
+        case .unverified: outcome = "入力未確認"
+        case .notPasted: outcome = "未送出"
         }
         return outcome + (item.polished ? "・AI 整形" : "・ローカル処理")
     }

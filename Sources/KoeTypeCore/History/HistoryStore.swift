@@ -1,6 +1,7 @@
 import Foundation
 
-public enum DeliveryOutcome: String, Codable, Sendable { case inserted, copyBox, insertedAndCopyBox }
+// Keep insertedAndCopyBox so existing history remains decodable. New uncertain pastes use unverified.
+public enum DeliveryOutcome: String, Codable, Sendable { case inserted, copyBox, insertedAndCopyBox, unverified, notPasted }
 
 public struct HistoryItem: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
@@ -12,11 +13,50 @@ public struct HistoryItem: Codable, Equatable, Identifiable, Sendable {
     public var polished: Bool
     public var durationSeconds: Double
 
+    private enum CodingKeys: String, CodingKey {
+        case id, date, rawText, finalText, appName, outcome, polished, durationSeconds, unverified, notPasted
+    }
+
     public init(id: UUID = UUID(), date: Date, rawText: String, finalText: String, appName: String?,
                 outcome: DeliveryOutcome, polished: Bool, durationSeconds: Double) {
         self.id = id; self.date = date; self.rawText = rawText; self.finalText = finalText
         self.appName = appName; self.outcome = outcome; self.polished = polished
         self.durationSeconds = durationSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let data = try decoder.container(keyedBy: CodingKeys.self)
+        id = try data.decode(UUID.self, forKey: .id)
+        date = try data.decode(Date.self, forKey: .date)
+        rawText = try data.decode(String.self, forKey: .rawText)
+        finalText = try data.decode(String.self, forKey: .finalText)
+        appName = try data.decodeIfPresent(String.self, forKey: .appName)
+        let storedOutcome = try data.decode(DeliveryOutcome.self, forKey: .outcome)
+        if try data.decodeIfPresent(Bool.self, forKey: .notPasted) == true {
+            outcome = .notPasted
+        } else if try data.decodeIfPresent(Bool.self, forKey: .unverified) == true {
+            outcome = .unverified
+        } else {
+            outcome = storedOutcome
+        }
+        polished = try data.decode(Bool.self, forKey: .polished)
+        durationSeconds = try data.decode(Double.self, forKey: .durationSeconds)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var data = encoder.container(keyedBy: CodingKeys.self)
+        try data.encode(id, forKey: .id)
+        try data.encode(date, forKey: .date)
+        try data.encode(rawText, forKey: .rawText)
+        try data.encode(finalText, forKey: .finalText)
+        try data.encodeIfPresent(appName, forKey: .appName)
+        // Older KoeType versions do not understand the new enum case. Preserve the
+        // whole history on rollback by using a known conservative outcome on disk.
+        try data.encode(outcome == .unverified || outcome == .notPasted ? .copyBox : outcome, forKey: .outcome)
+        if outcome == .unverified { try data.encode(true, forKey: .unverified) }
+        if outcome == .notPasted { try data.encode(true, forKey: .notPasted) }
+        try data.encode(polished, forKey: .polished)
+        try data.encode(durationSeconds, forKey: .durationSeconds)
     }
 }
 
