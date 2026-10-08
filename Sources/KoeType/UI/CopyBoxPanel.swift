@@ -8,6 +8,7 @@ final class CopyBoxPanel {
 
     fileprivate final class Model: ObservableObject {
         @Published var text = ""
+        @Published var message = ""
         var onCopy: () -> Void = {}
         var onClose: () -> Void = {}
     }
@@ -26,8 +27,9 @@ final class CopyBoxPanel {
         model.onClose = { [weak self] in self?.close() }
     }
 
-    func show(text: String) {
+    func show(text: String, message: String = "入力欄が見つからなかったため、ここに表示しています") {
         model.text = text
+        model.message = message
         // Above the recording indicator so the two never overlap.
         panel.show(bottomOffset: 72)
         closeTask?.cancel()
@@ -49,7 +51,7 @@ private struct CopyBoxView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("入力欄が見つからなかったため、ここに表示しています")
+            Text(model.message)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             ScrollView {
