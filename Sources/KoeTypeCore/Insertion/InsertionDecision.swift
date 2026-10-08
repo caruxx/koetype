@@ -1,3 +1,16 @@
+import Foundation
+
+/// UTF-16 offsets, matching the AXSelectedTextRange CFRange.
+public struct InsertionSelection: Equatable, Sendable {
+    public let location: Int
+    public let length: Int
+
+    public init(location: Int, length: Int) {
+        self.location = location
+        self.length = length
+    }
+}
+
 /// What the accessibility API reports about the element that has keyboard focus.
 public struct FocusSnapshot: Equatable, Sendable {
     /// AXRole of the focused element; nil when nothing has focus.
@@ -45,17 +58,42 @@ public enum InsertionDecision {
             // and keep the copy box as the safety net.
             return snapshot.appHasFocusedWindow ? .pasteAndCopyBox : .copyBoxOnly
         }
-        let looksLikeText = snapshot.isEditable || snapshot.hasSelectedTextRange || textRoles.contains(role)
-        // A readable value is the only way to know afterwards whether the paste landed.
-        if looksLikeText, snapshot.valueLength != nil { return .pasteThenVerify }
+        // A parent AXGroup (or web page body) can expose a selection and a readable
+        // value without representing the actual editable field.
+        if canVerify(snapshot) { return .pasteThenVerify }
         if snapshot.isEditable { return .pasteOnly }
         if nonTextRoles.contains(role) { return .copyBoxOnly }
         return .pasteAndCopyBox
     }
 
-    /// The paste reached the field if its content length is different afterwards.
-    public static func didInsert(lengthBefore: Int, lengthAfter: Int?) -> Bool {
-        guard let lengthAfter else { return false }
-        return lengthAfter != lengthBefore
+    public static func canVerify(_ snapshot: FocusSnapshot) -> Bool {
+        guard let role = snapshot.role else { return false }
+        return textRoles.contains(role) && snapshot.isEditable && snapshot.hasSelectedTextRange
+            && snapshot.valueLength != nil
+    }
+
+    public static func isOwnedByFrontmostApp(frontmostPID: Int32, targetPID: Int32?) -> Bool {
+        targetPID == frontmostPID
+    }
+
+    public static func isSameApplication(originalPID: Int32?, currentPID: Int32?) -> Bool {
+        guard let originalPID, let currentPID else { return false }
+        return originalPID == currentPID
+    }
+
+    /// Confirm only the exact replacement at the selection captured before the paste.
+    /// An unknown or invalid range cannot prove where the text landed.
+    public static func didInsert(valueBefore: String, valueAfter: String?, insertedText: String,
+                                 selection: InsertionSelection?) -> Bool {
+        guard let valueAfter, let selection, !insertedText.isEmpty else { return false }
+        let old = valueBefore as NSString
+        guard selection.location >= 0, selection.length >= 0,
+              selection.location <= old.length,
+              selection.length <= old.length - selection.location else { return false }
+        let expected = old.replacingCharacters(
+            in: NSRange(location: selection.location, length: selection.length), with: insertedText)
+        let normalizedAfter = valueAfter.precomposedStringWithCanonicalMapping
+        return normalizedAfter != valueBefore.precomposedStringWithCanonicalMapping
+            && normalizedAfter == expected.precomposedStringWithCanonicalMapping
     }
 }
