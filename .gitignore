@@ -6,3 +6,21 @@ xcuserdata/
 Models/
 *.mlmodelc
 .superpowers/
+
+# 個人データ・資格情報・配布生成物
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.wav
+*.mp3
+*.m4a
+*.aiff
+*.mp4
+*.app/
+history.json
+dictionary.json
+usage.json
