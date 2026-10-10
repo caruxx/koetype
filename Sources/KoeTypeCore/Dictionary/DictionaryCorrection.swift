@@ -42,6 +42,23 @@ public enum DictionaryCorrection {
                 cursor = text.index(after: range.lowerBound)
             }
         }
+        // Preserve literal URLs, addresses, handles, and code-like spans even when
+        // NaturalLanguage tokenizes an alias inside them as a standalone word.
+        let patterns = [
+            #"(?:[A-Za-z][A-Za-z0-9+.-]*://|www\.)[^\s<>"「」]+"#,
+            #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#,
+            #"(?<![\p{L}\p{N}_])[@#][A-Za-z0-9_]+"#,
+            #"(?s)```.*?```|`[^`\n]*`"#,
+            #"(?:[A-Za-z0-9_]+[._/+#:\\-]+)+[A-Za-z0-9_]+"#,
+            #"[A-Za-z_][A-Za-z0-9_]*\s*\("#,
+            #"--?[A-Za-z][A-Za-z0-9_-]*"#
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                if let range = Range(match.range, in: text) { protected.append(range) }
+            }
+        }
         func isASCIIWord(_ character: Character) -> Bool {
             character.unicodeScalars.allSatisfy {
                 $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_")

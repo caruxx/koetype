@@ -462,4 +462,53 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("history.json").path))
     }
 
+    func testAllOriginalDictionaryAndAICombinationsPreserveTheirOrder() async throws {
+        try dictionary.add(term: "KoeType", variants: ["コエタイプ"], now: Date())
+        let text = "えーと コエタイプ、コエタイプを使う。API-2ではなくAPI-3、1,200円！"
+        polisher.handler = { $0 }
+        for original in [false, true] {
+            for correction in [false, true] {
+                for ai in [false, true] {
+                    polishEnabled = ai
+                    transcriber.results = [.success(text)]
+                    let beforeCalls = polisher.calls
+                    await makePipeline(useOriginalText: original, correctDictionaryVariants: correction,
+                                       saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+                    var expected = original ? text : LocalCleanup.clean(HallucinationFilter.clean(text))
+                    if !original && correction {
+                        expected = DictionaryCorrection.apply(to: expected, entries: dictionary.entries)
+                    }
+                    XCTAssertEqual(deliverer.delivered.last, expected,
+                                   "original=\(original), correction=\(correction), ai=\(ai)")
+                    XCTAssertEqual(polisher.calls - beforeCalls, !original && ai ? 1 : 0)
+                }
+            }
+        }
+        XCTAssertTrue(history.items.isEmpty)
+    }
+
+    func testHistoryOffAcrossOutcomesRepeatedRecoveryAndNewSession() async throws {
+        try history.append(HistoryItem(date: Date(), rawText: "older", finalText: "older", appName: nil,
+                                      outcome: .inserted, polished: false, durationSeconds: 1))
+        let file = dir.appendingPathComponent("history.json")
+        let before = try Data(contentsOf: file)
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        polishEnabled = false
+        let pipeline = makePipeline(saveHistory: false)
+        for outcome in [DeliveryOutcome.inserted, .unverified, .notPasted, .copyBox] {
+            deliverer.outcome = outcome
+            transcriber.results = [.success("latest")]
+            await pipeline.submit(samples: [0.1], durationSeconds: 1).value
+            var copies: [String] = []
+            DeliveryPresentation.copyLatest(from: memory) { copies.append($0) }
+            DeliveryPresentation.copyLatest(from: memory) { copies.append($0) }
+            XCTAssertEqual(copies, ["latest", "latest"])
+            XCTAssertEqual(try Data(contentsOf: file), before)
+        }
+        XCTAssertEqual(deliverer.delivered.count, 4)
+        XCTAssertEqual(HistoryStore(fileURL: file).items.map(\.finalText), ["older"])
+        XCTAssertNil(LatestDeliveryMemory().latestText)
+    }
+
 }
