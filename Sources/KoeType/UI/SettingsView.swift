@@ -85,8 +85,9 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("入力履歴を保存", isOn: $settings.saveHistory)
-                Text("OFFは今後の音声入力履歴を保存しません。既存履歴は削除しません。直前のテキストは手動コピー用にメモリ内で保持し、アプリ終了で消えます。会議・ファイルの文字起こし保存、本文を含まない挿入診断ログ、API利用量の記録は別です。")
+                Toggle("新しい履歴を保存しない", isOn: Binding(
+                    get: { !settings.saveHistory }, set: { settings.saveHistory = !$0 }))
+                Text("ONにすると今後の音声入力履歴を保存しません。既存履歴は削除しません。直前のテキストは手動コピー用にメモリ内で保持し、アプリ終了で消えます。会議・ファイルの文字起こし保存、本文を含まない挿入診断ログ、API利用量の記録は別です。")
                     .footnoteStyle()
             } header: { Text("入力履歴") }
 
