@@ -511,4 +511,18 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertNil(LatestDeliveryMemory().latestText)
     }
 
+    func testSlashCommandsAndFileMentionsRemainTextWithoutAI() async throws {
+        try dictionary.add(term: "Renamed", variants: ["review", "flow"], now: Date())
+        let text = "/review @flow.swift を確認。API-2は使わない。"
+        polishEnabled = false
+        for original in [false, true] {
+            transcriber.results = [.success(text)]
+            await makePipeline(useOriginalText: original, correctDictionaryVariants: true,
+                               saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+            XCTAssertEqual(deliverer.delivered.last, text)
+        }
+        XCTAssertEqual(deliverer.delivered.count, 2)
+        XCTAssertEqual(polisher.calls, 0)
+    }
+
 }
