@@ -58,7 +58,7 @@ final class DictionaryCorrectionTests: XCTestCase {
 
     func testURLsAddressesHandlesAndCodeSpansRemainLiteral() {
         let entries = [DictionaryEntry(term: "Flow", variants: ["flow"])]
-        let text = #"https://flow http://flow/path flow://host flow@example.com @flow #flow `flow` flow::method flow\path flow() flow[0] --flow"#
+        let text = #"https://flow http://flow/path flow://host flow@example.com @flow #flow /flow `flow` flow::method flow\path flow() flow[0] --flow"#
         XCTAssertEqual(DictionaryCorrection.apply(to: text, entries: entries), text)
         XCTAssertEqual(DictionaryCorrection.apply(to: "flow", entries: entries), "Flow")
     }
