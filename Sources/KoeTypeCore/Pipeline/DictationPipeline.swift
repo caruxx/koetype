@@ -10,6 +10,9 @@ public actor DictationPipeline {
     private let deliverer: TextDelivering
     private let dictionary: DictionaryStore
     private let history: HistoryStore
+    private let useOriginalText: @Sendable () -> Bool
+    private let correctDictionaryVariants: @Sendable () -> Bool
+    private let saveHistory: @Sendable () -> Bool
     private let polishEnabled: @Sendable () -> Bool
     private let minimumAICharacters: @Sendable () -> Int
     private let styleFor: @Sendable (String?) -> PolishStyle
@@ -21,6 +24,9 @@ public actor DictationPipeline {
     public init(transcriber: Transcribing, polisher: Polishing, deliverer: TextDelivering,
                 dictionary: DictionaryStore, history: HistoryStore,
                 polishEnabled: @escaping @Sendable () -> Bool,
+                useOriginalText: @escaping @Sendable () -> Bool = { false },
+                correctDictionaryVariants: @escaping @Sendable () -> Bool = { false },
+                saveHistory: @escaping @Sendable () -> Bool = { true },
                 minimumAICharacters: @escaping @Sendable () -> Int = { 0 },
                 styleFor: @escaping @Sendable (String?) -> PolishStyle = { _ in .standard },
                 hintLimit: Int = 120,
@@ -28,6 +34,9 @@ public actor DictationPipeline {
                 onStatus: @escaping @Sendable (PipelineStatus) -> Void = { _ in }) {
         self.transcriber = transcriber; self.polisher = polisher; self.deliverer = deliverer
         self.dictionary = dictionary; self.history = history
+        self.useOriginalText = useOriginalText
+        self.correctDictionaryVariants = correctDictionaryVariants
+        self.saveHistory = saveHistory
         self.polishEnabled = polishEnabled; self.minimumAICharacters = minimumAICharacters
         self.styleFor = styleFor
         self.hintLimit = hintLimit
@@ -62,7 +71,9 @@ public actor DictationPipeline {
             onStatus(.failed("文字起こしに失敗しました"))
             return
         }
-        let raw = HallucinationFilter.clean(transcript)
+        let original = useOriginalText()
+        let raw = original ? transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                           : HallucinationFilter.clean(transcript)
         guard !raw.isEmpty else {
             onStatus(.nothingHeard)
             return
@@ -70,14 +81,17 @@ public actor DictationPipeline {
 
         // Local cleanup always runs. The model is consulted only when it is switched on and
         // the utterance is long enough to be worth it; its result replaces the local one.
-        var finalText = LocalCleanup.clean(raw)
+        var finalText = original ? raw : LocalCleanup.clean(raw)
+        if !original, correctDictionaryVariants() {
+            finalText = DictionaryCorrection.apply(to: finalText, entries: dictionary.entries)
+        }
         guard !finalText.isEmpty else {
             onStatus(.nothingHeard)
             return
         }
         var polished = false
         let style = styleFor(appBundleID)
-        if polishEnabled(), style != .minimal,
+        if !original, polishEnabled(), style != .minimal,
            PolishDecision.shouldUseAI(for: finalText, minimumCharacters: minimumAICharacters()) {
             onStatus(.polishing)
             // The model works on text whose fillers are already gone, and whatever it returns
@@ -96,7 +110,10 @@ public actor DictationPipeline {
                                appName: delivery.appName, outcome: delivery.outcome,
                                polished: polished, durationSeconds: durationSeconds)
         // The text has already reached the user; a failed save must not undo or hide that.
-        if (try? history.append(item)) == nil { onStatus(.warning("履歴を保存できませんでした")) }
+        // Consult at the save boundary so switching OFF during processing also prevents a write.
+        if saveHistory(), (try? history.append(item)) == nil {
+            onStatus(.warning("履歴を保存できませんでした"))
+        }
         onStatus(.delivered(delivery.outcome, polished: polished))
     }
 }

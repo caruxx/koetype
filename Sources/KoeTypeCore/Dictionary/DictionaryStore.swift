@@ -64,7 +64,7 @@ public final class DictionaryStore: @unchecked Sendable {
         var hint = ""
         for entry in entries {
             let candidate = hint.isEmpty ? entry.term : hint + "、" + entry.term
-            if candidate.count > maxCharacters { break }
+            if candidate.count > maxCharacters { continue }
             hint = candidate
         }
         return hint

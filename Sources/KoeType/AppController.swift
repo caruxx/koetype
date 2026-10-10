@@ -74,6 +74,9 @@ final class AppController: ObservableObject {
             deliverer: TextInserter(copyBox: copyBox, latestDelivery: latestDelivery),
             dictionary: dictionary, history: history,
             polishEnabled: { UserDefaults.standard.object(forKey: "polishEnabled") as? Bool ?? false },
+            useOriginalText: { UserDefaults.standard.bool(forKey: "useOriginalText") },
+            correctDictionaryVariants: { UserDefaults.standard.bool(forKey: "correctDictionaryVariants") },
+            saveHistory: { UserDefaults.standard.object(forKey: "saveHistory") as? Bool ?? true },
             minimumAICharacters: {
                 UserDefaults.standard.object(forKey: "minimumAICharacters") as? Int
                     ?? AppSettings.defaultMinimumAICharacters

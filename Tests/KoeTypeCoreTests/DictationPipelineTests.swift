@@ -33,8 +33,10 @@ private final class FakePolisher: Polishing, @unchecked Sendable {
 private final class FakeDeliverer: TextDelivering, @unchecked Sendable {
     var outcome: DeliveryOutcome = .inserted
     var latestMemory: LatestDeliveryMemory?
+    var onDeliver: (() -> Void)?
     private(set) var delivered: [String] = []
     func deliver(_ text: String) async -> DeliveryResult {
+        onDeliver?()
         delivered.append(text)
         latestMemory?.remember(text)
         return DeliveryResult(outcome: outcome, appName: "メモ")
@@ -46,6 +48,13 @@ private final class StatusLog: @unchecked Sendable {
     private var values: [PipelineStatus] = []
     func add(_ status: PipelineStatus) { lock.withLock { values.append(status) } }
     var all: [PipelineStatus] { lock.withLock { values } }
+}
+
+private final class SavePreference: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = true
+    var enabled: Bool { lock.withLock { value } }
+    func disable() { lock.withLock { value = false } }
 }
 
 private struct Boom: Error {}
@@ -70,13 +79,17 @@ final class DictationPipelineTests: XCTestCase {
     }
     override func tearDown() { try? FileManager.default.removeItem(at: dir) }
 
-    private func makePipeline() -> DictationPipeline {
+    private func makePipeline(useOriginalText: Bool = false, correctDictionaryVariants: Bool = false,
+                              saveHistory: Bool = true) -> DictationPipeline {
         let enabled = polishEnabled
         let minimum = minimumAICharacters
         let log = self.log!
         return DictationPipeline(transcriber: transcriber, polisher: polisher, deliverer: deliverer,
                                  dictionary: dictionary, history: history,
                                  polishEnabled: { enabled },
+                                 useOriginalText: { useOriginalText },
+                                 correctDictionaryVariants: { correctDictionaryVariants },
+                                 saveHistory: { saveHistory },
                                  minimumAICharacters: { minimum },
                                  styleFor: { AppStyleRules(overrides: [:]).style(forBundleID: $0) },
                                  now: { Date(timeIntervalSince1970: 100) },
@@ -359,4 +372,157 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(deliverer.delivered, ["来週の火曜日の午後3時から打ち合わせをお願いします。"])
         XCTAssertEqual(history.items.first?.rawText, "えーと、来週の火曜日の午後3時から打ち合わせをお願いします。")
     }
+    func testOriginalModePreservesMixedTextNegationNumbersAndFillers() async throws {
+        try dictionary.add(term: "Rewritten", variants: ["Swift"], now: Date())
+        let text = "えーと Swift 6とGPT-4oを使う。API-2ではなくAPI-3、価格は1,200円。"
+        transcriber.results = [.success("  " + text + "  ")]
+        await makePipeline(useOriginalText: true, correctDictionaryVariants: true).submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered, [text])
+        XCTAssertEqual(polisher.calls, 0)
+        XCTAssertEqual(history.items.first?.rawText, text)
+        XCTAssertEqual(history.items.first?.finalText, text)
+        XCTAssertEqual(log.all, [.transcribing, .delivered(.inserted, polished: false)])
+    }
+
+    func testOriginalModeKeepsLegitimateWordsRemovedByTheUsualSilenceFilter() async {
+        transcriber.results = [.success("音楽"), .success("えーと")]
+        let pipeline = makePipeline(useOriginalText: true)
+        await pipeline.submit(samples: [0.1], durationSeconds: 1).value
+        await pipeline.submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered, ["音楽", "えーと"])
+        XCTAssertEqual(polisher.calls, 0)
+    }
+
+    func testOriginalModeEmptyTranscriptDoesNotOverwriteLatestCopy() async {
+        let memory = LatestDeliveryMemory()
+        memory.remember("previous")
+        deliverer.latestMemory = memory
+        transcriber.results = [.success("  ")]
+        await makePipeline(useOriginalText: true, saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertTrue(deliverer.delivered.isEmpty)
+        XCTAssertEqual(memory.latestText, "previous")
+    }
+
+    func testDictionaryCorrectionIsOptInAndBeforeAI() async throws {
+        try dictionary.add(term: "KoeType", variants: ["コエタイプ"], now: Date())
+        transcriber.results = [.success("えーと コエタイプを使います"), .success("えーと コエタイプを使います")]
+        polishEnabled = false
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        polishEnabled = true
+        await makePipeline(correctDictionaryVariants: true).submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered.first, "コエタイプを使います")
+        XCTAssertEqual(polisher.inputs, ["KoeTypeを使います"])
+        XCTAssertEqual(history.items.first?.rawText, "えーと コエタイプを使います")
+    }
+
+    func testHistoryOffLeavesExistingBytesAndRecoversUnverifiedTextInMemory() async throws {
+        try history.append(HistoryItem(date: Date(), rawText: "older", finalText: "older", appName: nil,
+                                      outcome: .inserted, polished: false, durationSeconds: 1))
+        let file = dir.appendingPathComponent("history.json")
+        let before = try Data(contentsOf: file)
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        deliverer.outcome = .unverified
+        transcriber.results = [.success("latest")]
+        polishEnabled = false
+        await makePipeline(saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        XCTAssertEqual(history.items.count, 1)
+        var copied: [String] = []
+        DeliveryPresentation.copyLatest(from: memory) { copied.append($0) }
+        XCTAssertEqual(copied, ["latest"])
+        XCTAssertNil(LatestDeliveryMemory().latestText)
+        XCTAssertEqual(log.all, [.transcribing, .delivered(.unverified, polished: false)])
+    }
+
+    func testHistoryOffDoesNotCreateFileAndCanBeReenabled() async {
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        deliverer.outcome = .notPasted
+        transcriber.results = [.success("unsaved"), .success("saved")]
+        polishEnabled = false
+        await makePipeline(saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("history.json").path))
+        XCTAssertTrue(history.items.isEmpty)
+        XCTAssertEqual(memory.latestText, "unsaved")
+        await makePipeline().submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(history.items.map(\.finalText), ["saved"])
+    }
+
+    func testTurningHistoryOffDuringDeliveryPreventsThePendingWrite() async {
+        let preference = SavePreference()
+        deliverer.onDeliver = { preference.disable() }
+        transcriber.results = [.success("in flight")]
+        let pipeline = DictationPipeline(transcriber: transcriber, polisher: polisher, deliverer: deliverer,
+                                         dictionary: dictionary, history: history, polishEnabled: { false },
+                                         saveHistory: { preference.enabled })
+        await pipeline.submit(samples: [0.1], durationSeconds: 1).value
+        XCTAssertEqual(deliverer.delivered, ["in flight"])
+        XCTAssertTrue(history.items.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("history.json").path))
+    }
+
+    func testAllOriginalDictionaryAndAICombinationsPreserveTheirOrder() async throws {
+        try dictionary.add(term: "KoeType", variants: ["コエタイプ"], now: Date())
+        let text = "えーと コエタイプ、コエタイプを使う。API-2ではなくAPI-3、1,200円！"
+        polisher.handler = { $0 }
+        for original in [false, true] {
+            for correction in [false, true] {
+                for ai in [false, true] {
+                    polishEnabled = ai
+                    transcriber.results = [.success(text)]
+                    let beforeCalls = polisher.calls
+                    await makePipeline(useOriginalText: original, correctDictionaryVariants: correction,
+                                       saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+                    var expected = original ? text : LocalCleanup.clean(HallucinationFilter.clean(text))
+                    if !original && correction {
+                        expected = DictionaryCorrection.apply(to: expected, entries: dictionary.entries)
+                    }
+                    XCTAssertEqual(deliverer.delivered.last, expected,
+                                   "original=\(original), correction=\(correction), ai=\(ai)")
+                    XCTAssertEqual(polisher.calls - beforeCalls, !original && ai ? 1 : 0)
+                }
+            }
+        }
+        XCTAssertTrue(history.items.isEmpty)
+    }
+
+    func testHistoryOffAcrossOutcomesRepeatedRecoveryAndNewSession() async throws {
+        try history.append(HistoryItem(date: Date(), rawText: "older", finalText: "older", appName: nil,
+                                      outcome: .inserted, polished: false, durationSeconds: 1))
+        let file = dir.appendingPathComponent("history.json")
+        let before = try Data(contentsOf: file)
+        let memory = LatestDeliveryMemory()
+        deliverer.latestMemory = memory
+        polishEnabled = false
+        let pipeline = makePipeline(saveHistory: false)
+        for outcome in [DeliveryOutcome.inserted, .unverified, .notPasted, .copyBox] {
+            deliverer.outcome = outcome
+            transcriber.results = [.success("latest")]
+            await pipeline.submit(samples: [0.1], durationSeconds: 1).value
+            var copies: [String] = []
+            DeliveryPresentation.copyLatest(from: memory) { copies.append($0) }
+            DeliveryPresentation.copyLatest(from: memory) { copies.append($0) }
+            XCTAssertEqual(copies, ["latest", "latest"])
+            XCTAssertEqual(try Data(contentsOf: file), before)
+        }
+        XCTAssertEqual(deliverer.delivered.count, 4)
+        XCTAssertEqual(HistoryStore(fileURL: file).items.map(\.finalText), ["older"])
+        XCTAssertNil(LatestDeliveryMemory().latestText)
+    }
+
+    func testSlashCommandsAndFileMentionsRemainTextWithoutAI() async throws {
+        try dictionary.add(term: "Renamed", variants: ["review", "flow"], now: Date())
+        let text = "/review @flow.swift を確認。API-2は使わない。"
+        polishEnabled = false
+        for original in [false, true] {
+            transcriber.results = [.success(text)]
+            await makePipeline(useOriginalText: original, correctDictionaryVariants: true,
+                               saveHistory: false).submit(samples: [0.1], durationSeconds: 1).value
+            XCTAssertEqual(deliverer.delivered.last, text)
+        }
+        XCTAssertEqual(deliverer.delivered.count, 2)
+        XCTAssertEqual(polisher.calls, 0)
+    }
+
 }
