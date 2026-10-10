@@ -68,6 +68,10 @@ final class AppSettings: ObservableObject {
 
     private let defaults = UserDefaults.standard
 
+    @Published var useOriginalText: Bool { didSet { defaults.set(useOriginalText, forKey: "useOriginalText") } }
+    @Published var correctDictionaryVariants: Bool { didSet { defaults.set(correctDictionaryVariants, forKey: "correctDictionaryVariants") } }
+    @Published var saveHistory: Bool { didSet { defaults.set(saveHistory, forKey: "saveHistory") } }
+
     @Published var hotkey: HotkeyChoice { didSet { defaults.set(hotkey.rawValue, forKey: "hotkey") } }
     @Published var microphone: MicrophonePreference { didSet { defaults.set(microphone.stored, forKey: "microphone") } }
     @Published var whisperModel: String { didSet { defaults.set(whisperModel, forKey: "whisperModel") } }
@@ -87,6 +91,9 @@ final class AppSettings: ObservableObject {
     @Published var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: "launchAtLogin") } }
 
     private init() {
+        useOriginalText = defaults.bool(forKey: "useOriginalText")
+        correctDictionaryVariants = defaults.bool(forKey: "correctDictionaryVariants")
+        saveHistory = defaults.object(forKey: "saveHistory") as? Bool ?? true
         hotkey = defaults.string(forKey: "hotkey").flatMap(HotkeyChoice.init(rawValue:)) ?? .rightCommand
         microphone = MicrophonePreference(stored: defaults.string(forKey: "microphone"))
         whisperModel = defaults.string(forKey: "whisperModel") ?? Self.defaultWhisperModel
