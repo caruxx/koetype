@@ -50,7 +50,7 @@ public enum DictionaryCorrection {
             #"(?<![\p{L}\p{N}_])[@#][A-Za-z0-9_]+"#,
             #"(?s)```.*?```|`[^`\n]*`"#,
             #"(?:[A-Za-z0-9_]+[._/+#:\\-]+)+[A-Za-z0-9_]+"#,
-            #"[A-Za-z_][A-Za-z0-9_]*\s*\("#,
+            #"[A-Za-z_][A-Za-z0-9_]*\s*[\(\[]"#,
             #"--?[A-Za-z][A-Za-z0-9_-]*"#
         ]
         for pattern in patterns {
@@ -78,7 +78,10 @@ public enum DictionaryCorrection {
                 let prior = text.index(before: range.lowerBound)
                 if isJapanese(first), isJapanese(text[prior]),
                    !particles.contains(tokenEnding[range.lowerBound] ?? "") { return false }
+                if isJapanese(first), isASCIIWord(text[prior]) { return false }
                 if isASCIIWord(first) {
+                    if isJapanese(text[prior]),
+                       !particles.contains(tokenEnding[range.lowerBound] ?? "") { return false }
                     if isASCIIWord(text[prior]) { return false }
                     if "-.+#/'".contains(text[prior]), prior > text.startIndex,
                        isASCIIWord(text[text.index(before: prior)]) { return false }
@@ -88,7 +91,10 @@ public enum DictionaryCorrection {
                 let next = range.upperBound
                 if isJapanese(last), isJapanese(text[next]),
                    !particles.contains(tokenStarting[next] ?? "") { return false }
+                if isJapanese(last), isASCIIWord(text[next]) { return false }
                 if isASCIIWord(last) {
+                    if isJapanese(text[next]),
+                       !particles.contains(tokenStarting[next] ?? "") { return false }
                     if isASCIIWord(text[next]) { return false }
                     let after = text.index(after: next)
                     if "-.+#/'".contains(text[next]), after < text.endIndex,

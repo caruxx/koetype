@@ -58,9 +58,18 @@ final class DictionaryCorrectionTests: XCTestCase {
 
     func testURLsAddressesHandlesAndCodeSpansRemainLiteral() {
         let entries = [DictionaryEntry(term: "Flow", variants: ["flow"])]
-        let text = #"https://flow http://flow/path flow://host flow@example.com @flow #flow `flow` flow::method flow\path flow() --flow"#
+        let text = #"https://flow http://flow/path flow://host flow@example.com @flow #flow `flow` flow::method flow\path flow() flow[0] --flow"#
         XCTAssertEqual(DictionaryCorrection.apply(to: text, entries: entries), text)
         XCTAssertEqual(DictionaryCorrection.apply(to: "flow", entries: entries), "Flow")
+    }
+
+    func testMixedScriptIdentifiersAreNotPartiallyCorrected() {
+        let entries = [DictionaryEntry(term: "KoeType", variants: ["コエタイプ"]),
+                       DictionaryEntry(term: "Flow", variants: ["flow"])]
+        let text = "コエタイプAPI APIコエタイプ コエタイプ2 2コエタイプ flow東京 東京flow"
+        XCTAssertEqual(DictionaryCorrection.apply(to: text, entries: entries), text)
+        XCTAssertEqual(DictionaryCorrection.apply(to: "コエタイプを使う。flowを使う。", entries: entries),
+                       "KoeTypeを使う。Flowを使う。")
     }
 
 }
