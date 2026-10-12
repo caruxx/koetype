@@ -9,7 +9,8 @@ enum InsertionLog {
             .appendingPathComponent("Logs/KoeType/insertion.log")
     }
 
-    static func record(app: String?, snapshot: FocusSnapshot?, plan: InsertionPlan, verified: Bool?) {
+    static func record(app: String?, snapshot: FocusSnapshot?, plan: InsertionPlan,
+                       verification: InsertionVerification.Result?, outcome: DeliveryOutcome) {
         let fields: [String]
         if let snapshot {
             fields = ["role=\(snapshot.role ?? "none")", "editable=\(snapshot.isEditable)",
@@ -18,9 +19,9 @@ enum InsertionLog {
         } else {
             fields = ["query=failed"]
         }
-        let result = verified.map { "verified=\($0)" } ?? "verified=n/a"
+        let result = "verification=\(verification?.rawValue ?? "notAttempted")"
         let line = ([ISO8601DateFormatter().string(from: Date()), "app=\(app ?? "unknown")"] + fields
-            + ["plan=\(plan)", result]).joined(separator: " ") + "\n"
+            + ["plan=\(plan)", result, "outcome=\(outcome.rawValue)"]).joined(separator: " ") + "\n"
         let url = fileURL
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let handle = try? FileHandle(forWritingTo: url) {

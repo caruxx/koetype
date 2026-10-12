@@ -8,6 +8,7 @@ enum FocusInspector {
         var snapshot: FocusSnapshot?
         var appName: String?
         var element: AXUIElement?
+        var appPID: pid_t?
     }
 
     /// Describes the focused element of the frontmost app.
@@ -29,7 +30,7 @@ enum FocusInspector {
         let appName = app.localizedName
         guard Permissions.accessibilityGranted,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            return Focus(snapshot: nil, appName: appName, element: nil)
+            return Focus(snapshot: nil, appName: appName, element: nil, appPID: app.processIdentifier)
         }
 
         let application = AXUIElementCreateApplication(app.processIdentifier)
@@ -52,9 +53,19 @@ enum FocusInspector {
         switch result {
         case .success:
             guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-                return Focus(snapshot: nil, appName: appName, element: nil)
+                return Focus(snapshot: nil, appName: appName, element: nil, appPID: app.processIdentifier)
             }
             let element = focused as! AXUIElement
+            var elementPID: pid_t = 0
+            let pidResult = AXUIElementGetPid(element, &elementPID)
+            guard InsertionDecision.isOwnedByFrontmostApp(
+                frontmostPID: app.processIdentifier,
+                targetPID: pidResult == .success ? elementPID : nil) else {
+                // In particular, a system-wide focus answer can belong to another app.
+                // Do not paste into a target whose owner does not match the frontmost app.
+                return Focus(snapshot: FocusSnapshot(role: nil, hasSelectedTextRange: false),
+                             appName: appName, element: nil, appPID: app.processIdentifier)
+            }
             var role: CFTypeRef?
             AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
             var range: CFTypeRef?
@@ -64,15 +75,15 @@ enum FocusInspector {
                 role: role as? String, hasSelectedTextRange: hasRange,
                 isEditable: isSettable(element, kAXValueAttribute) || isSettable(element, kAXSelectedTextRangeAttribute),
                 valueLength: length(of: element), appHasFocusedWindow: true)
-            return Focus(snapshot: snapshot, appName: appName, element: element)
+            return Focus(snapshot: snapshot, appName: appName, element: element, appPID: app.processIdentifier)
         case .noValue:
             var window: CFTypeRef?
             let hasWindow = AXUIElementCopyAttributeValue(
                 application, kAXFocusedWindowAttribute as CFString, &window) == .success
             return Focus(snapshot: FocusSnapshot(role: nil, hasSelectedTextRange: false, appHasFocusedWindow: hasWindow),
-                         appName: appName, element: nil)
+                         appName: appName, element: nil, appPID: app.processIdentifier)
         default:
-            return Focus(snapshot: nil, appName: appName, element: nil)
+            return Focus(snapshot: nil, appName: appName, element: nil, appPID: app.processIdentifier)
         }
     }
 
@@ -83,12 +94,41 @@ enum FocusInspector {
            let number = count as? Int {
             return number
         }
+        return value(of: element)?.count
+    }
+
+    /// Only the focused field's transient value is read; it is never written to the log.
+    static func value(of element: AXUIElement) -> String? {
         var value: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
-           let text = value as? String {
-            return text.count
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    static func selection(of element: AXUIElement) -> InsertionSelection? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        let axValue = value as! AXValue
+        guard AXValueGetType(axValue) == .cfRange else { return nil }
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(axValue, .cfRange, &range) else { return nil }
+        return InsertionSelection(location: range.location, length: range.length)
+    }
+
+    static func verificationSample(for original: Focus) -> InsertionVerification.Sample {
+        // The verification loop already retries; avoid three extra AX queries per sample.
+        let current = inspectOnce()
+        guard InsertionDecision.isSameApplication(originalPID: original.appPID,
+                                                 currentPID: current.appPID) else {
+            return .field(value: nil, selection: nil, sameApp: false,
+                          sameElement: false, snapshot: FocusSnapshot(role: nil, hasSelectedTextRange: false))
         }
-        return nil
+        guard let originalElement = original.element, let currentElement = current.element else {
+            return .temporarilyUnavailable
+        }
+        return .field(value: value(of: currentElement), selection: selection(of: currentElement), sameApp: true,
+                      sameElement: CFEqual(originalElement, currentElement),
+                      snapshot: current.snapshot ?? FocusSnapshot(role: nil, hasSelectedTextRange: false))
     }
 
     private static func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
