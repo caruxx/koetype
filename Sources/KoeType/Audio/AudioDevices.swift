@@ -30,6 +30,24 @@ enum AudioDevices {
         return all.first { $0.device.uid == wanted.uid }?.id
     }
 
+    /// The device a recording with this preference uses right now: the chosen one, else the system default.
+    static func inputDeviceID(for preference: MicrophonePreference) -> AudioDeviceID? {
+        if let chosen = deviceID(for: preference) { return chosen }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id) == noErr,
+              id != kAudioObjectUnknown else { return nil }
+        return id
+    }
+
+    /// UID of the microphone a recording with this preference uses right now, nil if there is no input.
+    static func inputUID(for preference: MicrophonePreference) -> String? {
+        inputDeviceID(for: preference).flatMap { string($0, kAudioDevicePropertyDeviceUID) }
+    }
+
     private static func hasInput(_ id: AudioDeviceID) -> Bool {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
                                                  mScope: kAudioDevicePropertyScopeInput,
