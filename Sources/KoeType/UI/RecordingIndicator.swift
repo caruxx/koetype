@@ -8,6 +8,8 @@ final class RecordingIndicator {
         @Published var display: IndicatorDisplay = .hidden
         @Published var levels = LevelHistory(capacity: 32)
         @Published var startedAt = Date()
+        /// False until the microphone delivers its first audio (a Bluetooth headset takes about a second).
+        @Published var microphoneReady = false
     }
 
     private let model = Model()
@@ -23,6 +25,7 @@ final class RecordingIndicator {
         if display.isRecording, !wasRecording {
             model.levels.reset()
             model.startedAt = Date()
+            model.microphoneReady = false
         }
         if display == .hidden {
             panel.orderOut(nil)
@@ -33,6 +36,7 @@ final class RecordingIndicator {
 
     func setLevel(_ level: Float) {
         guard model.display.isRecording else { return }
+        if !model.microphoneReady { model.microphoneReady = true }
         model.levels.push(level)
     }
 }
@@ -112,6 +116,7 @@ private struct IndicatorView: View {
 
     /// Tells the user whether their voice is actually reaching the app.
     private func caption(handsFree: Bool) -> String {
+        if !model.microphoneReady { return "マイクを準備しています" }
         if !model.levels.heardSpeech { return "お話しください" }
         return handsFree ? "もう一度押すと終了" : "離すと入力"
     }
