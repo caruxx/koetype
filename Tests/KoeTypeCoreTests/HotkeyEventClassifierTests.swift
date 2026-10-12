@@ -68,9 +68,22 @@ final class HotkeyEventClassifierTests: XCTestCase {
         var classifier = HotkeyEventClassifier(trigger: rightCommand)
         _ = classifier.classify(.flagsChanged, keyCode: 54, flags: 0x10, fromSelf: false)
         // The release never arrived; the next typed key shows the trigger is up.
-        XCTAssertEqual(classifier.classify(.keyDown, keyCode: 8, flags: 0, fromSelf: false), .triggerUp)
         XCTAssertEqual(classifier.classify(.keyDown, keyCode: 8, flags: 0, fromSelf: false), .otherKeyDown)
         XCTAssertEqual(classifier.classify(.flagsChanged, keyCode: 54, flags: 0x10, fromSelf: false), .triggerDown)
+    }
+
+    func testEscapeAfterAMissedReleaseIsStillEscape() {
+        var classifier = HotkeyEventClassifier(trigger: rightCommand)
+        _ = classifier.classify(.flagsChanged, keyCode: 54, flags: 0x10, fromSelf: false)
+        XCTAssertEqual(classifier.classify(.keyDown, keyCode: 53, flags: 0, fromSelf: false), .escape)
+        XCTAssertEqual(classifier.classify(.flagsChanged, keyCode: 54, flags: 0x10, fromSelf: false), .triggerDown)
+    }
+
+    func testAKeyWhileTheTriggerIsHeldKeepsItHeld() {
+        var classifier = HotkeyEventClassifier(trigger: rightCommand)
+        _ = classifier.classify(.flagsChanged, keyCode: 54, flags: 0x10 | genericCommand, fromSelf: false)
+        XCTAssertEqual(classifier.classify(.keyDown, keyCode: 8, flags: 0x10 | genericCommand, fromSelf: false), .otherKeyDown)
+        XCTAssertEqual(classifier.classify(.flagsChanged, keyCode: 54, flags: 0, fromSelf: false), .triggerUp)
     }
 
     func testFnTriggerUsesTheSecondaryFnFlag() {
