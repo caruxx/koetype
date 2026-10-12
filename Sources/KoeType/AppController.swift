@@ -111,6 +111,7 @@ final class AppController: ObservableObject {
             self?.endRecordingWithoutKey()
             self?.show(message: "マイクが切り替わったため、ここまでを入力します")
         }
+        monitor.onActiveChange = { [weak self] active in self?.hotkeyActive = active }
         monitor.onInput = { [weak self] input, time in
             guard let self else { return }
             if input == .otherKeyDown || input == .triggerUp { self.delayedIndicator?.cancel() }
