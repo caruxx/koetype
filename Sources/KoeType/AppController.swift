@@ -112,10 +112,14 @@ final class AppController: ObservableObject {
         recorder.preference = { MicrophonePreference(stored: UserDefaults.standard.string(forKey: "microphone")) }
         recorder.onLevel = { [weak self] level in self?.indicator.setLevel(level) }
         recorder.onLimitReached = { [weak self] in self?.endRecordingWithoutKey() }
-        recorder.onInterrupted = { [weak self] in
+        recorder.onInterrupted = { [weak self] reason in
             self?.endRecordingWithoutKey()
-            self?.show(message: "マイクが切り替わったため、ここまでを入力します")
+            switch reason {
+            case .microphoneSwitched: self?.show(message: "マイクが切り替わったため、ここまでを入力します")
+            case .microphoneStopped: self?.show(message: "マイクが止まったため、ここまでを入力します")
+            }
         }
+        monitor.onActiveChange = { [weak self] active in self?.hotkeyActive = active }
         monitor.onInput = { [weak self] input, time in
             guard let self else { return }
             if input == .otherKeyDown || input == .triggerUp { self.delayedIndicator?.cancel() }
@@ -170,7 +174,12 @@ final class AppController: ObservableObject {
             refreshIndicator()
         case .cancelRecording:
             delayedIndicator?.cancel()
-            recorder.cancel()
+            if machine.awaitsSecondTap {
+                // A second tap may follow: keep the microphone open so hands-free starts without delay.
+                recorder.cancel(keepingMicrophoneOpenFor: machine.doubleTapWindow + 0.2)
+            } else {
+                recorder.cancel()
+            }
             refreshIndicator()
         case .stopAndProcess:
             delayedIndicator?.cancel()
