@@ -27,6 +27,12 @@ public struct HotkeyEventClassifier {
         guard !fromSelf else { return nil }
         switch kind {
         case .keyDown:
+            // A key event carries the live modifier bits. If the trigger is no longer down,
+            // its release was lost; report it, or the next press would never be seen as one.
+            if triggerIsDown, flags & trigger.deviceMask == 0 {
+                triggerIsDown = false
+                return .triggerUp
+            }
             return keyCode == Self.escapeKeyCode ? .escape : .otherKeyDown
         case .pointer:
             return .otherKeyDown
