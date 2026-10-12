@@ -27,6 +27,12 @@ public struct HotkeyStateMachine {
         }
     }
 
+    /// A short tap was just released: a second press soon after starts hands-free.
+    public var awaitsSecondTap: Bool {
+        if case .tapped = state { return true }
+        return false
+    }
+
     public mutating func reset() { state = .idle }
 
     /// How long after an automatic stop the next press is taken as "stop" rather than "start".

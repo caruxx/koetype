@@ -19,6 +19,22 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(machine.isRecording)
     }
 
+    func testOnlyAShortTapAwaitsASecondTap() {
+        var machine = HotkeyStateMachine()
+        XCTAssertFalse(machine.awaitsSecondTap)
+        _ = machine.handle(.triggerDown, at: 0)
+        XCTAssertFalse(machine.awaitsSecondTap)
+        _ = machine.handle(.triggerUp, at: 0.1)
+        XCTAssertTrue(machine.awaitsSecondTap)
+        _ = machine.handle(.triggerDown, at: 0.3)
+        XCTAssertFalse(machine.awaitsSecondTap)
+
+        var shortcut = HotkeyStateMachine()
+        _ = shortcut.handle(.triggerDown, at: 0)
+        XCTAssertEqual(shortcut.handle(.otherKeyDown, at: 0.1), [.cancelRecording])
+        XCTAssertFalse(shortcut.awaitsSecondTap)
+    }
+
     func testDoubleTapEntersHandsFreeAndNextPressStops() {
         var machine = HotkeyStateMachine()
         _ = machine.handle(.triggerDown, at: 0)
