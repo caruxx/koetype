@@ -3,6 +3,8 @@ import Foundation
 import KoeTypeCore
 
 /// Verification aid: measures how long the microphone takes to deliver audio after `start()`.
+/// Runs on the main actor like the app, since `AudioRecorder` handles device changes on the main queue.
+@MainActor
 enum MicrophoneLatency {
     static func run() async -> Int32 {
         guard await AVCaptureDevice.requestAccess(for: .audio) else {
