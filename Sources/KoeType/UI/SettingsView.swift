@@ -41,9 +41,13 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("認識原文をそのまま入力", isOn: $settings.useOriginalText)
+                Toggle("登録した異表記を辞書の表記に補正", isOn: $settings.correctDictionaryVariants)
+                    .disabled(settings.useOriginalText)
                 Toggle("AI で高精度に整える", isOn: $settings.polishEnabled)
+                    .disabled(settings.useOriginalText)
                 // Everything about the AI connection stays hidden until it is switched on.
-                if settings.polishEnabled {
+                if settings.polishEnabled && !settings.useOriginalText {
                     Picker("処理する場所", selection: $settings.polishBackend) {
                         ForEach(PolishBackend.allCases) { Text($0.label).tag($0) }
                     }
@@ -72,11 +76,20 @@ struct SettingsView: View {
             } header: {
                 Text("整形")
             } footer: {
-                Text(settings.polishEnabled
+                Text(settings.useOriginalText
+                     ? "認識結果の前後の空白以外は変更しません。辞書ヒントは認識時に使いますが、認識後の辞書補正・フィラー除去・AI整形は省略します。認識そのものの誤りや無音末尾の除外は残ります。"
+                     : "通常はフィラー除去 → 任意の辞書補正 → 任意のAI整形の順です。辞書補正は登録した異表記の語境界が確認できる場合だけ行い、部分語・競合する登録は変更しません。\n" + (settings.polishEnabled
                      ? backendNote
-                     : "オフの間は句読点と「えーと」などの除去だけを行います。オンにすると、言い直しの整理や文脈からの誤認識の修正、アプリに合わせた文体の調整を行います。")
+                     : "オフの間は句読点と「えーと」などの除去だけを行います。オンにすると、言い直しの整理や文脈からの誤認識の修正、アプリに合わせた文体の調整を行います。"))
                     .footnoteStyle()
             }
+
+            Section {
+                Toggle("新しい履歴を保存しない", isOn: Binding(
+                    get: { !settings.saveHistory }, set: { settings.saveHistory = !$0 }))
+                Text("ONにすると今後の音声入力履歴を保存しません。既存履歴は削除しません。直前のテキストは手動コピー用にメモリ内で保持し、アプリ終了で消えます。会議・ファイルの文字起こし保存、本文を含まない挿入診断ログ、API利用量の記録は別です。")
+                    .footnoteStyle()
+            } header: { Text("入力履歴") }
 
             Section {
                 Toggle("ログイン時に起動", isOn: Binding(

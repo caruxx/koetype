@@ -44,4 +44,12 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertEqual(store.hintText(maxCharacters: 4), "")
         XCTAssertEqual(store.hintText(maxCharacters: 100), "さしすせそ、かきくけこ、あいうえお")
     }
+    func testLongNewestEntryDoesNotHideShorterFollowingHints() throws {
+        let store = DictionaryStore(fileURL: url)
+        try store.add(term: "API", variants: [], now: Date(timeIntervalSince1970: 1))
+        try store.add(term: String(repeating: "長", count: 20), variants: [], now: Date(timeIntervalSince1970: 2))
+        XCTAssertEqual(store.hintText(maxCharacters: 5), "API")
+        XCTAssertEqual(store.hintText(maxCharacters: 0), "")
+    }
+
 }
