@@ -39,21 +39,28 @@ final class AudioRecorder {
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                  &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
-        try run(engine)
-        self.engine = engine
-        isRecording = true
         // A Bluetooth headset switches to its call profile once its microphone opens, which stops the
         // engine shortly after it starts. Start it again with the new format and keep what was captured.
+        // Observe before starting so a change that arrives right away is not missed.
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            guard let self, self.isRecording, let engine = self.engine else { return }
+        ) { [weak self] note in
+            // A change queued for an earlier recording's engine must not restart this one.
+            guard let self, self.isRecording, let engine = self.engine, note.object as AnyObject? === engine else { return }
             if self.restarts < Self.maxRestarts, (try? self.run(engine)) != nil {
                 self.restarts += 1
             } else {
                 self.onInterrupted?()
             }
         }
+        self.engine = engine
+        do {
+            try run(engine)
+        } catch {
+            teardown()
+            throw error
+        }
+        isRecording = true
     }
 
     /// (Re)attaches the tap with the input's current format and starts the engine.
