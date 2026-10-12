@@ -9,6 +9,14 @@ struct MenuContent: View {
 
     var body: some View {
         Text(controller.statusText)
+        if controller.latestDelivery.latestText != nil {
+            Button(DeliveryPresentation.manualCopyTitle) {
+                DeliveryPresentation.copyLatest(from: controller.latestDelivery) { text in
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+            }
+        }
         Divider()
         Text("最近の入力")
         if recent.isEmpty {
