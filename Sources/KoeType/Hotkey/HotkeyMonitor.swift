@@ -20,8 +20,9 @@ final class HotkeyMonitor {
     func start(choice: HotkeyChoice) -> Bool {
         stop()
         self.choice = choice
+        classifier = HotkeyEventClassifier(trigger: .init(deviceMask: choice.deviceMask))
         startWatching()
-        return createTap(choice: choice)
+        return createTap()
     }
 
     func stop() {
@@ -29,9 +30,8 @@ final class HotkeyMonitor {
         removeTap()
     }
 
-    private func createTap(choice: HotkeyChoice) -> Bool {
+    private func createTap() -> Bool {
         removeTap()
-        classifier = HotkeyEventClassifier(trigger: .init(deviceMask: choice.deviceMask))
         let types: [CGEventType] = [.flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown,
                                     .otherMouseDown, .scrollWheel]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << CGEventMask($1.rawValue)) }
@@ -83,18 +83,21 @@ final class HotkeyMonitor {
 
     private func checkTap() {
         guard choice != nil else { return }
+        // Catches a release that was lost while the tap stayed enabled.
+        resync()
         guard let tap, CFMachPortIsValid(tap) else { return rebuild() }
         guard !CGEvent.tapIsEnabled(tap: tap) else { return }
         CGEvent.tapEnable(tap: tap, enable: true)
-        if CGEvent.tapIsEnabled(tap: tap) { resync() } else { rebuild() }
+        if !CGEvent.tapIsEnabled(tap: tap) { rebuild() }
     }
 
     private func rebuild() {
-        guard let choice else { return }
-        // A release may have been missed while the tap was dead; settle it before the classifier is replaced.
+        guard choice != nil else { return }
+        // A release may have been missed while the tap was dead. The classifier is kept,
+        // so a key held through the rebuild is still seen when it is released.
         resync()
         let wasActive = tap != nil
-        let active = createTap(choice: choice)
+        let active = createTap()
         if active != wasActive { onActiveChange?(active) }
     }
 
