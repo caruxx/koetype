@@ -14,39 +14,67 @@ final class AudioRecorder {
     var onLimitReached: (() -> Void)?
     /// Which microphone to use; read at every `start()` so a change in settings applies at once.
     var preference: () -> MicrophonePreference = { .systemDefault }
-    /// The input device changed or disappeared while recording. Called on the main queue.
+    /// The input device disappeared while recording and the engine could not be restarted. Called on the main queue.
     var onInterrupted: (() -> Void)?
     private var configurationObserver: NSObjectProtocol?
     private(set) var isRecording = false
 
     private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
+    /// How many times one recording may restart the engine after a configuration change.
+    private static let maxRestarts = 3
+    private var restarts = 0
     private let lock = NSLock()
     private var samples: [Float] = []
     private var limitFired = false
 
     func start() throws {
         cancel()
+        lock.withLock { samples.removeAll(keepingCapacity: true) }
+        limitFired = false
+        restarts = 0
         // A fresh engine per recording picks up device changes (AirPods connect, mic unplugged).
         let engine = AVAudioEngine()
-        let input = engine.inputNode
         // Point the engine at the chosen microphone before asking for its format.
-        if var deviceID = AudioDevices.deviceID(for: preference()), let unit = input.audioUnit {
+        if var deviceID = AudioDevices.deviceID(for: preference()), let unit = engine.inputNode.audioUnit {
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                  &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
+        try run(engine)
+        self.engine = engine
+        isRecording = true
+        // A Bluetooth headset switches to its call profile once its microphone opens, which stops the
+        // engine shortly after it starts. Start it again with the new format and keep what was captured.
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isRecording, let engine = self.engine else { return }
+            if self.restarts < Self.maxRestarts, (try? self.run(engine)) != nil {
+                self.restarts += 1
+            } else {
+                self.onInterrupted?()
+            }
+        }
+    }
+
+    /// (Re)attaches the tap with the input's current format and starts the engine.
+    private func run(_ engine: AVAudioEngine) throws {
+        let input = engine.inputNode
+        input.removeTap(onBus: 0)
+        engine.stop()
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioRecorderError.noInputDevice
         }
         let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate,
                                    channels: 1, interleaved: false)!
-        guard let converter = AVAudioConverter(from: inputFormat, to: target) else {
-            throw AudioRecorderError.noInputDevice
-        }
-        lock.withLock { samples.removeAll(keepingCapacity: true) }
-        limitFired = false
-        input.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
+        // The format is passed as nil so the tap always matches the hardware: a stale format raises an
+        // Objective-C exception that ends the app. The converter follows whatever the buffers carry.
+        var converter: AVAudioConverter?
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
+            if converter?.inputFormat != buffer.format {
+                converter = AVAudioConverter(from: buffer.format, to: target)
+            }
+            guard let converter else { return }
             self?.append(buffer, converter: converter, target: target)
         }
         do {
@@ -55,16 +83,6 @@ final class AudioRecorder {
         } catch {
             input.removeTap(onBus: 0)
             throw AudioRecorderError.engineFailed(error)
-        }
-        self.engine = engine
-        self.converter = converter
-        isRecording = true
-        // After a device change the tap stops delivering audio; hand back what was captured.
-        configurationObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            guard let self, self.isRecording else { return }
-            self.onInterrupted?()
         }
     }
 
@@ -85,7 +103,6 @@ final class AudioRecorder {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
-        converter = nil
         isRecording = false
     }
 
