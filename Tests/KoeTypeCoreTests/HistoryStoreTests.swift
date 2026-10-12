@@ -1,6 +1,18 @@
 import XCTest
 @testable import KoeTypeCore
 
+private enum LegacyOutcome: String, Decodable { case inserted, copyBox, insertedAndCopyBox }
+private struct LegacyHistoryItem: Decodable {
+    let id: UUID
+    let date: Date
+    let rawText: String
+    let finalText: String
+    let appName: String?
+    let outcome: LegacyOutcome
+    let polished: Bool
+    let durationSeconds: Double
+}
+
 final class HistoryStoreTests: XCTestCase {
     var url: URL!
     override func setUp() {
@@ -43,5 +55,26 @@ final class HistoryStoreTests: XCTestCase {
         try store.append(target)
         try store.remove(id: target.id)
         XCTAssertTrue(store.items.isEmpty)
+    }
+
+    func testNewAndLegacyDeliveryOutcomesRemainReadable() throws {
+        let store = HistoryStore(fileURL: url)
+        var legacy = item("旧履歴", at: 1)
+        legacy.outcome = .insertedAndCopyBox
+        var current = item("新履歴", at: 2)
+        current.outcome = .unverified
+        var notPasted = item("未送出", at: 3)
+        notPasted.outcome = .notPasted
+        try store.append(legacy)
+        try store.append(current)
+        try store.append(notPasted)
+        XCTAssertEqual(HistoryStore(fileURL: url).items.map(\.outcome),
+                       [.notPasted, .unverified, .insertedAndCopyBox])
+        // The installed older app must decode the entire file rather than move it
+        // aside as corrupt because it does not know the new enum case.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let legacyReader = try decoder.decode([LegacyHistoryItem].self, from: Data(contentsOf: url))
+        XCTAssertEqual(legacyReader.map(\.outcome), [.copyBox, .copyBox, .insertedAndCopyBox])
     }
 }
