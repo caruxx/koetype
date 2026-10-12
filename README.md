@@ -6,23 +6,30 @@
 ## 必要なもの
 
 - macOS 14 以降、Apple Silicon の Mac
-- Xcode（コマンドラインツールを含む）
-- キーチェーンに登録された Apple Development 証明書
-- OpenAI API キー（AI 整形を使う場合のみ。なくても使える）
+- Swift 6.0 以上を使える Xcode（コマンドラインツールを含む）。内蔵AI対応をビルドする場合は FoundationModels を含む macOS 26 SDK が必要
+- Git、依存パッケージと音声認識モデルをダウンロードできるインターネット接続
+- アプリのコード署名。自分の Mac で試す場合は下記の ad-hoc 署名も指定できる
+- OpenAI API キー（OpenAI API で整形する場合のみ。ローカル処理・内蔵AIでは不要）
 
 ## 導入
 
+このリポジトリは **公開**。参加者は GitHub にログインせずソースを閲覧・取得できる。上の条件を満たす各自の Mac でビルドする。配布用の署名・公証済みバイナリは提供していない。
+
+次のコマンドは今回の配布準備ブランチを取得する。`main` はまだアプリ実装・今回の修正を統合していない。
+
 ```bash
-git clone https://github.com/caruxx/koetype.git
+git clone --branch docs/meetup-source-distribution-20261009 https://github.com/caruxx/koetype.git
 cd koetype
-scripts/build-app.sh release
+KOETYPE_SIGN_IDENTITY=- scripts/build-app.sh release
 open ~/Applications/KoeType.app
 ```
 
-1. 初回起動時に出る画面で、マイクとアクセシビリティを許可する。
+ビルドスクリプトは稼働中の KoeType を終了し、`~/Applications/KoeType.app` を置き換える。録音・処理が終わってから実行する。`KOETYPE_SIGN_IDENTITY=-` は各自の Mac 用の ad-hoc 署名であり、公証済み配布を意味しない。再ビルド後に権限の再許可が必要になる場合がある。
+
+1. 初回起動時に出る画面で、マイクとアクセシビリティを各自で許可する。システム設定の「プライバシーとセキュリティ」で KoeType を確認する。
 2. 音声認識モデル（約 630MB）のダウンロードと準備を待つ。初回だけ数分かかる。
 
-この時点で、Mac の中だけで完結する音声入力として使える（費用はかからない）。
+既定では AI 整形はオフ。ダウンロード後の音声認識・ローカル整形は Mac 内で行い、アプリから有料APIを呼ばない。
 
 ## 整形の方法
 
@@ -31,13 +38,16 @@ open ~/Applications/KoeType.app
 | 設定 | 内容 | 費用 |
 |---|---|---|
 | オフ（既定） | 句読点の付与と、「えーと」「あのー」などの除去。すべて Mac 内で処理 | 無料 |
-| オン: この Mac の中で | 上に加えて、言い直しの整理、文脈からの誤認識の修正、アプリに合わせた文体。macOS 内蔵の AI を使い、文章は Mac の外に出ない。1 回 約 1 秒 | 無料 |
-| オン: OpenAI API | 同じ処理を OpenAI の Luna（`gpt-6-luna`）で行う。精度を最も重視する場合 | 利用した分だけ課金 |
-| オン: Codex CLI | ChatGPT にログイン済みの Codex CLI を通す。1 回 約 5 秒 | ChatGPT の利用枠 |
+| オン: この Mac の中で | macOS 26 以降で、Apple Intelligence のモデルが利用可能なときのみ内蔵AIで整形。文章は Mac 内で処理 | 外部API課金なし |
+| オン: OpenAI API | 設定したモデルを OpenAI API で呼ぶ。各自のAPIキーと利用可能なモデルの設定が必要 | APIリクエストに応じて各自のアカウントへ課金 |
+| オン: Codex CLI | 各自がインストール・認証した Codex CLI を起動して整形。Node.js と選択モデルへのアクセスが必要 | CLIの認証方式・契約に応じた利用枠またはAPI料金 |
 
 - AI に送るのは既定で 20 文字以上の発話だけ。短い発話はローカル処理だけで入力される。
 - AI の結果が、話した内容を削りすぎている・別の内容になっている場合は採用せず、ローカル処理の結果を入力する。
-- 内蔵の AI は速いが、文末の言い回しを変えるなど小さな書き換えをすることがある。忠実さを重視するなら OpenAI API を選ぶ。
+- 内蔵AIが利用できない、キー・モデルが無効、CLIが見つからない、タイムアウト等の場合はローカル処理の結果に戻る。AIの精度・速度は環境と内容で変わる。
+- OpenAI API を使う人だけ、設定画面で **自分のAPIキー** を保存して接続テストする。キーは各自のキーチェーンに保存される。作者のキー・設定はソースに含まれない。
+- Codex CLI は `~/.npm-global/bin/codex`、`/opt/homebrew/bin/codex`、`/usr/local/bin/codex` の順で探す。CLIのモデルも各自の利用可能なものに設定する。
+- 設定画面の費用はソース内の固定単価による概算。実際の請求はサービス側の料金・契約を確認する。
 
 ### アプリ別の文体
 
@@ -64,7 +74,8 @@ AI 整形がオンのとき、文章を入力する先のアプリで整え方�
 | 右 Command を素早く 2 回押す | ハンズフリー録音を開始。もう一度押すと終了（最長 10 分） |
 | 録音中に Esc | 取り消し |
 
-- 入力欄が見つからないときは、画面下部にコピーボックスが出る。30 秒で自動的に閉じるが、内容は履歴に残る。
+- 入力対象が明確にない場合はコピーボックスが出る。貼り付けを送出したがAXで確認できない場合は、2秒の「入力未確認」を表示し、コピー用ポップアップは出さない。
+- ChatGPTなどで文字が入っていても「入力未確認」になる場合がある。空欄を確認してから、メニューの「直前の文字起こしをコピー」で手動回収する。アプリは自動再貼り付けしないため、手動貼り付け前に二重入力にならないか確認する。
 - 「履歴を開く」で過去の入力を検索・再コピーできる（直近 1,000 件）。
 - 「辞書を開く」で固有名詞や専門用語を登録すると、認識と整形の両方で使われる。
 - ホットキーは設定で 右 Command / 右 Option / 右 Control / Fn から選べる。
@@ -87,13 +98,17 @@ KOETYPE_SIGN_IDENTITY="Apple Development: name@example.com (XXXXXXXXXX)" scripts
 | 辞書 | `~/Library/Application Support/KoeType/dictionary.json` |
 | 音声認識モデル | `~/Library/Application Support/KoeType/Models` |
 | API キー | キーチェーン（サービス名 `jp.caruvistar.koetype`） |
+| 設定 | UserDefaults（アプリの設定領域） |
+| API利用量の概算用記録 | `~/Library/Application Support/KoeType/usage.json` |
+| 挿入診断ログ | `~/Library/Logs/KoeType/insertion.log`（日時・対象アプリ・処理状態。入力本文なし） |
+| 会議・ファイルの文字起こし | `~/Documents/KoeType/` |
 
-音声そのものは保存しない。
+音声そのものは保存しない。履歴と文字起こしファイルには発話の本文が保存される。これらの個人データ、ログ、APIキー、証明書、音声ファイルをリポジトリや配布物に追加しない。診断用 `KOETYPE_DEBUG_SEGMENTS` を有効にすると標準エラーへ認識本文が出るため、通常利用では設定しない。
 
 ## 外部に送られるもの
 
 既定の「ローカルのみ」では、外部への送信は行わない（音声認識モデルの初回ダウンロードを除く）。
-「AI で高精度に整える」を選んだ場合に限り、設定した文字数以上の発話について、文字起こし後のテキストと辞書の内容を OpenAI の API に送る。音声は送らない。
+AI 整形をオンにして **OpenAI API または Codex CLI** を選ぶと、対象の文字起こし本文と辞書の内容を選択したサービスへ送る。内蔵AIは Mac 内で処理する。音声データはこれらの整形経路へ送らない。会議・ファイルの長い文字起こしはローカル認識のみ。
 
 ## 困ったとき
 
@@ -119,3 +134,9 @@ scripts/build-app.sh release    # ~/Applications/KoeType.app を作って署名
 ```
 
 設計は `docs/superpowers/specs/`、実装計画は `docs/superpowers/plans/`、検証記録は `docs/verification.md` にある。
+
+## 既知の制約とライセンス
+
+- macOS の AX が入力欄を公開しない場合、貼り付け成功を確認できない。送信後に欄が空になった場合も未確認として扱う。実際の ChatGPT 入力欄での自動検証は未実施。
+- 対応は Apple Silicon の macOS を前提とし、Windows・Linux・Intel Mac は検証対象外。内蔵AIの利用可否はOS・端末・設定に依存する。
+- このプロジェクトの利用許諾ライセンスは **未指定**。参加者への利用・改変・再配布の許諾範囲は作者の決定が必要。新しいライセンスはこの配布準備では追加していない。依存ライブラリ・音声認識モデルのライセンスもそれぞれ確認する。
