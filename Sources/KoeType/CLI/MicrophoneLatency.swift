@@ -20,11 +20,20 @@ enum MicrophoneLatency {
         for entry in AudioDevices.inputs() {
             print("input device: \(entry.device.name) builtIn=\(entry.device.isBuiltIn)")
         }
+        // With --double-tap each attempt is a short tap followed by a second press, as when starting hands-free.
+        let doubleTap = arguments.contains("--double-tap")
+        recorder.onInterrupted = { reason in print("interrupted: \(reason)") }
         for attempt in 1...4 {
             let began = Date()
             var firstBuffer: Date?
             recorder.onLevel = { _ in if firstBuffer == nil { firstBuffer = Date() } }
             do {
+                if doubleTap {
+                    try recorder.start()
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    recorder.cancel(keepingMicrophoneOpenFor: 0.6)
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
                 try recorder.start()
             } catch {
                 print("start failed: \(error)")
