@@ -4,6 +4,33 @@ import KoeTypeCore
 
 /// Lists the Mac's audio input devices.
 enum AudioDevices {
+    /// One serial queue for listings requested by the UI: the HAL call can stall, and it must hold
+    /// neither the main queue nor a thread of the cooperative pool while it does.
+    private static let listingQueue = DispatchQueue(label: "jp.caruvistar.koetype.audio-devices")
+    private static let listingLock = NSLock()
+    /// Callers waiting for the listing in flight; a request made while one is outstanding shares it.
+    private static var listingWaiters: [CheckedContinuation<[AudioInputDevice], Never>] = []   // guarded by `listingLock`
+
+    /// The input devices, listed off the caller's thread. While a listing is still waiting on the HAL,
+    /// further requests do not pile up: they get that listing's result once it returns.
+    static func inputDevices() async -> [AudioInputDevice] {
+        await withCheckedContinuation { continuation in
+            let first: Bool = listingLock.withLock {
+                listingWaiters.append(continuation)
+                return listingWaiters.count == 1
+            }
+            guard first else { return }
+            listingQueue.async {
+                let devices = inputs().map(\.device)
+                let waiters: [CheckedContinuation<[AudioInputDevice], Never>] = listingLock.withLock {
+                    defer { listingWaiters.removeAll() }
+                    return listingWaiters
+                }
+                for waiter in waiters { waiter.resume(returning: devices) }
+            }
+        }
+    }
+
     static func inputs() -> [(device: AudioInputDevice, id: AudioDeviceID)] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                                  mScope: kAudioObjectPropertyScopeGlobal,

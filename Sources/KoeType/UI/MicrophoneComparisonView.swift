@@ -57,11 +57,9 @@ struct MicrophoneComparisonView: View {
         results = []
         message = ""
         Task {
-            // Listing the microphones asks the Core Audio HAL, which can stall: not on the main queue.
+            // Listing the microphones asks the Core Audio HAL, which can stall: it runs on its own queue.
             // Phone microphones offered through Continuity would wake the phone; leave them out.
-            let devices = await Task.detached {
-                AudioDevices.inputs().map(\.device).filter { !$0.name.contains("iPhone") }
-            }.value
+            let devices = await AudioDevices.inputDevices().filter { !$0.name.contains("iPhone") }
             guard !devices.isEmpty else {
                 message = "録音できるマイクがありません"
                 working = false

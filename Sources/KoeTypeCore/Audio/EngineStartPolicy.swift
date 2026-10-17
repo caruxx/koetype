@@ -12,13 +12,15 @@ public enum EngineStartPolicy {
     /// True when the numbered `work`, begun for recording `generation`, is still the current recording's
     /// and has not reported back: the recorder gives up on it. Work for an older recording is left alone,
     /// because the newer recording's own work sits behind it on the same queue and is watched by itself.
+    /// Work is tracked one by one, not by the highest number reported: numbers are handed out from
+    /// several threads and can be begun and finished out of order.
     /// - Parameters:
     ///   - work: the number of the stretch of work.
     ///   - generation: the recording the work was begun for.
     ///   - current: the generation of the latest recording.
-    ///   - lastCompleted: the highest work number that has reported back (or been given up on).
-    public static func givesUp(work: Int, generation: Int, current: Int, lastCompleted: Int) -> Bool {
-        generation == current && lastCompleted < work
+    ///   - pending: the work numbers that have neither reported back nor been given up on.
+    public static func givesUp(work: Int, generation: Int, current: Int, pending: Set<Int>) -> Bool {
+        generation == current && pending.contains(work)
     }
 
     /// True when a recording whose engine reported started has still heard nothing from the microphone

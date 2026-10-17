@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var showAdvanced = false
     /// Filled off the main queue: listing the microphones asks the Core Audio HAL, which can stall.
     @State private var inputDevices: [AudioInputDevice] = []
+    @State private var inputDevicesListed = false
     @State private var listingDevices = false
     @State private var monthlyUsage = AppController.shared.usage.month(containing: Date())
 
@@ -33,7 +34,7 @@ struct SettingsView: View {
                 Picker("マイク", selection: $settings.microphone) {
                     Text("システムの設定に従う").tag(MicrophonePreference.systemDefault)
                     Text("Mac 本体のマイク").tag(MicrophonePreference.builtIn)
-                    ForEach(inputDevices.filter { !$0.isBuiltIn }) { device in
+                    ForEach(pickerDevices) { device in
                         Text(device.name).tag(MicrophonePreference.device(uid: device.uid))
                     }
                 }
@@ -149,13 +150,22 @@ struct SettingsView: View {
         }
     }
 
+    /// The external microphones to offer. Until the first listing returns, a stored choice of a specific
+    /// device stands in for itself, so the picker always has a tag for the current selection.
+    private var pickerDevices: [AudioInputDevice] {
+        let listed = inputDevices.filter { !$0.isBuiltIn }
+        guard !inputDevicesListed, case .device(let uid) = settings.microphone else { return listed }
+        return listed + [AudioInputDevice(uid: uid, name: "選択中のマイク", isBuiltIn: false)]
+    }
+
     /// One listing at a time: while the HAL keeps one waiting, the timer must not pile up more.
     private func refreshInputDevices() {
         guard !listingDevices else { return }
         listingDevices = true
         Task {
-            let devices = await Task.detached { AudioDevices.inputs().map(\.device) }.value
+            let devices = await AudioDevices.inputDevices()
             inputDevices = devices
+            inputDevicesListed = true
             listingDevices = false
         }
     }
