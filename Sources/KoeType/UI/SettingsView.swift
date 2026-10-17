@@ -16,7 +16,9 @@ struct SettingsView: View {
     @State private var loginMessage = ""
     @State private var accessibilityGranted = Permissions.accessibilityGranted
     @State private var showAdvanced = false
-    @State private var inputDevices = AudioDevices.inputs().map(\.device)
+    /// Filled off the main queue: listing the microphones asks the Core Audio HAL, which can stall.
+    @State private var inputDevices: [AudioInputDevice] = []
+    @State private var listingDevices = false
     @State private var monthlyUsage = AppController.shared.usage.month(containing: Date())
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -136,13 +138,25 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 380)
         .onReceive(timer) { _ in
-            inputDevices = AudioDevices.inputs().map(\.device)
+            refreshInputDevices()
             accessibilityGranted = Permissions.accessibilityGranted
             controller.refreshPermissions()
         }
+        .onAppear { refreshInputDevices() }
         .onReceive(NotificationCenter.default.publisher(for: UsageStore.didChange)
             .receive(on: DispatchQueue.main)) { _ in
             monthlyUsage = controller.usage.month(containing: Date())
+        }
+    }
+
+    /// One listing at a time: while the HAL keeps one waiting, the timer must not pile up more.
+    private func refreshInputDevices() {
+        guard !listingDevices else { return }
+        listingDevices = true
+        Task {
+            let devices = await Task.detached { AudioDevices.inputs().map(\.device) }.value
+            inputDevices = devices
+            listingDevices = false
         }
     }
 

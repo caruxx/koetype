@@ -53,24 +53,28 @@ struct MicrophoneComparisonView: View {
             message = "音声認識モデルを準備中です"
             return
         }
-        // Phone microphones offered through Continuity would wake the phone; leave them out.
-        let devices = AudioDevices.inputs().map(\.device).filter { !$0.name.contains("iPhone") }
-        guard !devices.isEmpty else {
-            message = "録音できるマイクがありません"
-            return
-        }
-        // Each microphone opens on its recorder's own queue; one that fails simply records nothing.
-        let recorders: [(device: AudioInputDevice, recorder: AudioRecorder)] = devices.map { device in
-            let recorder = AudioRecorder()
-            recorder.preference = { .device(uid: device.uid) }
-            recorder.start()
-            return (device, recorder)
-        }
         working = true
         results = []
         message = ""
-        remaining = Self.seconds
         Task {
+            // Listing the microphones asks the Core Audio HAL, which can stall: not on the main queue.
+            // Phone microphones offered through Continuity would wake the phone; leave them out.
+            let devices = await Task.detached {
+                AudioDevices.inputs().map(\.device).filter { !$0.name.contains("iPhone") }
+            }.value
+            guard !devices.isEmpty else {
+                message = "録音できるマイクがありません"
+                working = false
+                return
+            }
+            // Each microphone opens on its recorder's own queue; one that fails simply records nothing.
+            let recorders: [(device: AudioInputDevice, recorder: AudioRecorder)] = devices.map { device in
+                let recorder = AudioRecorder()
+                recorder.preference = { .device(uid: device.uid) }
+                recorder.start()
+                return (device, recorder)
+            }
+            remaining = Self.seconds
             while remaining > 0 {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 remaining -= 1
