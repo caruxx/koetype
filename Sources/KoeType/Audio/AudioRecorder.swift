@@ -354,17 +354,9 @@ private final class Worker {
     private let lock = NSLock()
     /// The recorder gave up waiting for this worker. Read on the queue and in the tap; set from main.
     private var abandoned = false   // guarded by `lock`
-    /// A configuration change is queued or being handled; further changes until it is done only set
-    /// `changedAgain`, so a burst (a Bluetooth profile switch posts several) is handled once, not queued up.
-    private var changeQueued = false   // guarded by `lock`
-    /// Changes that arrived while one was queued or being handled: the recording current at the latest
-    /// arrival, so the follow-up handling is for it and not for one that began meanwhile, and the engines
-    /// they were posted by, so the follow-up is for the engine in use if it was among them.
-    private var changedAgain: (generation: Int, engines: [WeakEngine])?   // guarded by `lock`
-
-    private struct WeakEngine {
-        weak var engine: AVAudioEngine?
-    }
+    /// While a configuration change is queued or being handled, further changes are folded into one
+    /// follow-up, so a burst (a Bluetooth profile switch posts several) is handled once, not queued up.
+    private var changes = ConfigurationChangeCoalescer<AVAudioEngine>()   // guarded by `lock`
 
     var isAbandoned: Bool { lock.withLock { abandoned } }
 
@@ -489,47 +481,46 @@ private final class Worker {
     /// handling (the device query, every restart attempt) are watched separately: a queue stuck elsewhere
     /// is still told from the first, while a burst of changes waiting its turn behind restarts of 0.2-1 s
     /// each, or a query and a restart that each finish in time, are not mistaken for a stall.
-    private func noteConfigurationChange(_ engine: AVAudioEngine, generation: Int? = nil) {
-        guard !isAbandoned, let recorder else { return }
-        // Read before taking this worker's lock: the recorder's lock is never taken inside it.
-        let posted = generation ?? recorder.currentGeneration
-        let alreadyQueued: Bool = lock.withLock {
-            if changeQueued {
-                // The latest arrival wins: the follow-up handling is for the recording current by then.
-                var engines = changedAgain?.engines.filter { $0.engine != nil } ?? []
-                if !engines.contains(where: { $0.engine === engine }) { engines.append(WeakEngine(engine: engine)) }
-                changedAgain = (posted, engines)
-            }
-            defer { changeQueued = true }
-            return changeQueued
-        }
-        if alreadyQueued { return }
+    private func noteConfigurationChange(_ engine: AVAudioEngine) {
+        guard let recorder else { return }
+        let posted = recorder.currentGeneration
         // Silence is expected from now on, not only once a restart begins: the device query before it can
-        // take a while too. Counted until the handling, and any restart chain it begins, is over.
+        // take a while too. Counted at once for the recording current now, whether the change is handled
+        // now or folded into a follow-up, until the handling that covers it, and any restart chain that
+        // handling begins, is over.
         recorder.changeWorkBegan(generation: posted)
+        queueConfigurationChange(engine, generation: posted, counted: [posted], recorder: recorder)
+    }
+
+    /// Queues a handling for `generation`, which covers the changes counted for `counted`, unless one is
+    /// queued or running: then it is folded into that one's follow-up.
+    private func queueConfigurationChange(_ engine: AVAudioEngine, generation posted: Int, counted: [Int],
+                                          recorder: AudioRecorder) {
+        // Taken under this worker's lock only; the recorder's lock is never taken inside it.
+        let handling = isAbandoned ? nil : lock.withLock { changes.arrive(generation: posted, counted: counted, from: engine) }
+        if isAbandoned { return counted.forEach { recorder.changeWorkEnded(generation: $0) } }
+        guard let handling else { return }
         let wait = recorder.beginWork(for: posted, on: self)
         queue.async { [weak self, weak engine] in
             recorder.finishWork(wait)
-            // Runs last: a restart chain the handling began is already counted by then.
-            defer { recorder.changeWorkEnded(generation: posted) }
+            // Runs last: a restart chain the handling began, and the follow-up, are counted by then.
+            defer { handling.counted.forEach { recorder.changeWorkEnded(generation: $0) } }
             guard let self else { return }
-            defer { self.followUpConfigurationChange() }
-            guard let engine else { return }
-            self.configurationChanged(engine, posted: posted)
+            if let engine { self.configurationChanged(engine, posted: posted) }
+            self.followUpConfigurationChange(recorder: recorder)
         }
     }
 
     /// On the queue, once a handling is over. Changes that arrived meanwhile are handled once more, for
     /// the engine in use now: one replaced in the meantime has no business being restarted, and the
-    /// change of the engine that replaced it must not be lost.
-    private func followUpConfigurationChange() {
-        let again = lock.withLock {
-            changeQueued = false
-            defer { changedAgain = nil }
-            return changedAgain
-        }
-        guard let again, let engine, again.engines.contains(where: { $0.engine === engine }) else { return }
-        noteConfigurationChange(engine, generation: again.generation)
+    /// change of the engine that replaced it must not be lost. Their counts go with the follow-up, or end
+    /// here when there is none.
+    private func followUpConfigurationChange(recorder: AudioRecorder) {
+        let engine = self.engine
+        let done = lock.withLock { changes.finish(current: engine) }
+        done.released.forEach { recorder.changeWorkEnded(generation: $0) }
+        guard let followUp = done.followUp, let engine else { return }
+        queueConfigurationChange(engine, generation: followUp.generation, counted: followUp.counted, recorder: recorder)
     }
 
     /// A Bluetooth headset switches to its call profile once its microphone opens, which stops the
@@ -542,6 +533,10 @@ private final class Worker {
         // microphone is in use can both stall: they are watched as one step under that recording, so a
         // stall in it is still given up on. Each restart attempt below is watched on its own.
         let generation = recorder.currentGeneration
+        // The change may have been counted for an older recording only: silence of the current one is
+        // held off for this step as well, until a restart chain takes over or the handling ends.
+        recorder.changeWorkBegan(generation: generation)
+        defer { recorder.changeWorkEnded(generation: generation) }
         let query = recorder.beginWork(for: generation, on: self)
         // A change from before the current recording matters only if it left the engine stopped.
         let stale = posted != generation && changed.isRunning
@@ -592,7 +587,14 @@ private final class Worker {
 
     private func interrupt(_ reason: AudioInterruption, generation: Int) {
         discardOnStop = true
-        guard let recorder, recorder.isRecording else { return discardEngine() }
+        guard let recorder else { return discardEngine() }
+        guard recorder.isRecording else {
+            // The microphone was only kept open: closing it can stall like any engine call, and the second
+            // press is queued behind it, so it is watched too (given up on silently, nothing is recording).
+            let work = recorder.beginWork(for: generation, on: self)
+            discardEngine()
+            return recorder.finishWork(work)
+        }
         recorder.interrupted(reason, generation: generation, from: self)
     }
 
@@ -604,6 +606,8 @@ private final class Worker {
         guard !isAbandoned else { throw AudioRecorderError.abandoned }
         input.removeTap(onBus: 0)
         engine.stop()
+        alignOutputFormatWithHardware(input)
+        guard !isAbandoned else { throw AudioRecorderError.abandoned }
         let inputFormat = input.outputFormat(forBus: 0)
         guard !isAbandoned else { throw AudioRecorderError.abandoned }
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
@@ -639,5 +643,25 @@ private final class Worker {
             input.removeTap(onBus: 0)
             throw AudioRecorderError.engineFailed(error)
         }
+    }
+
+    /// An engine pointed at a chosen microphone keeps the input node's output format of the device it
+    /// was made with, and the input node does not convert sample rates: a Bluetooth headset in its 16 kHz
+    /// call profile behind the 48 kHz format of the device before fails to start with -10868. The output
+    /// format is set to the hardware's rate and channels, so the tap (format nil) follows the hardware.
+    /// The engine converts to 16 kHz in the tap anyway. Both reads ask the HAL; the caller checks for
+    /// abandonment afterwards.
+    private func alignOutputFormatWithHardware(_ input: AVAudioInputNode) {
+        let hardware = input.inputFormat(forBus: 0)
+        guard !isAbandoned else { return }
+        let output = input.outputFormat(forBus: 0)
+        guard InputFormatAlignment.needed(hardwareRate: hardware.sampleRate, hardwareChannels: hardware.channelCount,
+                                          outputRate: output.sampleRate, outputChannels: output.channelCount),
+              !isAbandoned, let unit = input.audioUnit,
+              let aligned = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate, channels: hardware.channelCount)
+        else { return }
+        var description = aligned.streamDescription.pointee
+        AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &description,
+                             UInt32(MemoryLayout<AudioStreamBasicDescription>.size))
     }
 }
