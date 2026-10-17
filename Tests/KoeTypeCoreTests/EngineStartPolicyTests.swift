@@ -36,38 +36,41 @@ final class EngineStartPolicyTests: XCTestCase {
         XCTAssertFalse(EngineStartPolicy.givesUp(work: 9, generation: 5, current: 5, pending: [7]))
     }
 
+    private func verdict(generation: Int = 5, current: Int = 5, recording: Bool = true, audioHeard: Bool = false,
+                         changePending: Bool = false) -> EngineStartPolicy.SilenceVerdict {
+        EngineStartPolicy.silenceVerdict(generation: generation, current: current, recording: recording,
+                                         audioHeard: audioHeard, changePending: changePending)
+    }
+
     func testAStartedEngineThatStaysSilentIsGivenUp() {
-        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
-                                                         restartPending: false))
+        XCTAssertEqual(verdict(), .giveUp)
     }
 
     func testAStartedEngineThatDeliveredAudioIsKept() {
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: true,
-                                                          restartPending: false))
+        XCTAssertEqual(verdict(audioHeard: true), .keep)
+        XCTAssertEqual(verdict(audioHeard: true, changePending: true), .keep)
     }
 
     func testSilenceIsNotJudgedAfterAShortTapOrForAnOlderRecording() {
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: false, audioHeard: false,
-                                                          restartPending: false))
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 6, recording: true, audioHeard: false,
-                                                          restartPending: false))
+        XCTAssertEqual(verdict(recording: false), .keep)
+        XCTAssertEqual(verdict(current: 6), .keep)
+        XCTAssertEqual(verdict(recording: false, changePending: true), .keep)
+        XCTAssertEqual(verdict(current: 6, changePending: true), .keep)
     }
 
-    func testSilenceIsNotJudgedWhileARestartChainIsStillAtWork() {
-        // A Bluetooth profile switch before the first buffer: attempts fail and back off. The watch
-        // from the first start fires while a retry is about to succeed; it must wait for the chain.
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
-                                                          restartPending: true))
-        // Once the chain is over and a restart has armed a fresh watch, silence counts again.
-        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
-                                                         restartPending: false))
+    func testSilenceIsPutOffWhileAConfigurationChangeIsBeingHandled() {
+        // A Bluetooth profile switch before the first buffer: the change is noted, its device query takes
+        // a while, then restart attempts fail and back off. The watch from the first start fires anywhere
+        // in that stretch, even before any restart began; it must not give up but ask again later.
+        XCTAssertEqual(verdict(changePending: true), .checkAgain)
+        // Once the handling is over (a restart armed a fresh watch, or none was needed), silence counts again.
+        XCTAssertEqual(verdict(changePending: false), .giveUp)
     }
 
     func testHeardIsCountedSinceTheLastRestartNotSinceTheFirstStart() {
         // The recorder resets `audioHeard` when it arms the watch of a successful restart, so a restart
         // that "succeeds" and then delivers nothing is judged on what arrived after it.
-        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
-                                                         restartPending: false))
+        XCTAssertEqual(verdict(audioHeard: false), .giveUp)
     }
 
     func testOnlyTheCurrentWorkerArmsTheSilenceWatchForTheCurrentRecording() {

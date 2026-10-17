@@ -30,15 +30,31 @@ public enum EngineStartPolicy {
         workerCurrent && !abandoned && generation == current
     }
 
-    /// True when a recording whose engine reported (re)started has still heard nothing from the
-    /// microphone since that (re)start after `timeout`: the recorder gives up on the worker. Only a
+    /// What a silence watch does when it fires.
+    public enum SilenceVerdict: Equatable {
+        /// Nothing: the microphone was heard, or the recording is over or no longer current.
+        case keep
+        /// The microphone is treated as not responding and the worker is given up on.
+        case giveUp
+        /// Nothing has been heard, but a configuration change is still being handled: ask again after
+        /// another `timeout`. A restart that succeeds meanwhile arms a newer watch, which replaces this one.
+        case checkAgain
+    }
+
+    /// Judges a recording whose engine reported (re)started, `timeout` after that (re)start. Only a
     /// recording that is still running and still current counts; a short tap or a newer recording is
-    /// not judged by this. While a restart chain is still at work (an attempt running or a retry waiting
-    /// its backoff) silence is expected and not judged either: a stuck attempt is bounded by its own
-    /// work watchdog, the retries are counted, and the restart that succeeds arms a fresh watch.
-    public static func givesUpOnSilence(generation: Int, current: Int, recording: Bool, audioHeard: Bool,
-                                        restartPending: Bool) -> Bool {
-        generation == current && recording && !audioHeard && !restartPending
+    /// not judged. Nothing heard means the worker is given up on, unless a configuration change is still
+    /// being handled: from the moment it is noted (the device query before any restart can itself take a
+    /// while) until its handling is over, including a restart chain it begins (an attempt running or a
+    /// retry waiting its backoff), silence is expected. A stuck step is bounded by its own work watchdog
+    /// and the retries are counted; the verdict is only put off, so a change that ends without a restart
+    /// still has the silence judged afterwards.
+    /// - Parameters:
+    ///   - changePending: a configuration change of this recording is noted and not yet fully handled.
+    public static func silenceVerdict(generation: Int, current: Int, recording: Bool, audioHeard: Bool,
+                                      changePending: Bool) -> SilenceVerdict {
+        guard generation == current, recording, !audioHeard else { return .keep }
+        return changePending ? .checkAgain : .giveUp
     }
 
     /// True when an engine whose start just finished is kept. Only an engine the recorder gave up on is

@@ -9,8 +9,7 @@ enum AudioDevices {
     private static let listingQueue = DispatchQueue(label: "jp.caruvistar.koetype.audio-devices")
     private static let listingLock = NSLock()
     /// Callers waiting for the listing in flight; a request made while one is outstanding shares it.
-    private static var listingWaiters: [@Sendable ([AudioInputDevice]) -> Void] = []   // guarded by `listingLock`
-    private static let maxListingWaiters = 8
+    private static var listingWaiters = SharedWaiters<@Sendable ([AudioInputDevice]) -> Void>()   // guarded by `listingLock`
 
     /// The input devices, listed off the caller's thread, or nil when the listing has not returned within
     /// `seconds`. While a listing is still waiting on the HAL, further requests do not pile up: they share
@@ -18,20 +17,15 @@ enum AudioDevices {
     /// HAL fails every caller in time instead of holding them (the late result is simply dropped).
     static func inputDevices(within seconds: TimeInterval) async -> [AudioInputDevice]? {
         await Deadline.first(within: seconds) { deliver in
-            let first: Bool = listingLock.withLock {
-                // While the HAL never returns, every caller times out on its own; the oldest waiters are
-                // the ones whose deadline has long passed, so the list is kept short by dropping them.
-                if listingWaiters.count >= maxListingWaiters { listingWaiters.removeFirst() }
-                listingWaiters.append(deliver)
-                return listingWaiters.count == 1
-            }
+            let now = DispatchTime.now().uptimeNanoseconds
+            let deadline = now + UInt64(max(0, seconds) * 1_000_000_000)
+            // While the HAL never returns, every caller times out on its own: only those whose deadline has
+            // passed are dropped, so the list stays as short as the callers still waiting.
+            let first = listingLock.withLock { listingWaiters.add(deliver, deadline: deadline, now: now) }
             guard first else { return }
             listingQueue.async {
                 let devices = inputs().map(\.device)
-                let waiters: [@Sendable ([AudioInputDevice]) -> Void] = listingLock.withLock {
-                    defer { listingWaiters.removeAll() }
-                    return listingWaiters
-                }
+                let waiters = listingLock.withLock { listingWaiters.takeAll() }
                 for waiter in waiters { waiter(devices) }
             }
         }
