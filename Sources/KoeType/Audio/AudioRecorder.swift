@@ -59,9 +59,14 @@ final class AudioRecorder {
     private var pendingWork: Set<Int> = []   // guarded by `lock`
     /// Whether any buffer has arrived since `start()`, captured or not.
     private var audioHeard = false   // guarded by `lock`
+    /// Numbers the silence watches, so only the latest one (armed by the last successful start or
+    /// restart) may give up.
+    private var silenceWatch = 0   // guarded by `lock`
     private var limitFired = false   // main queue only
-    /// Owns the engine and its queue. Replaced from the main queue when its work stalls.
-    private var worker: Worker
+    /// Owns the engine and its queue. Replaced from the main queue when its work stalls; read from the
+    /// audio thread too, so the lock guards it.
+    private var worker: Worker   // guarded by `lock`
+    private var currentWorker: Worker { lock.withLock { worker } }
 
     init() {
         worker = Worker()
@@ -69,7 +74,7 @@ final class AudioRecorder {
     }
 
     deinit {
-        let worker = self.worker
+        let worker = currentWorker
         worker.queue.async { worker.discardEngine() }
     }
 
@@ -88,7 +93,7 @@ final class AudioRecorder {
         }
         limitFired = false
         let wanted = preference()
-        let worker = self.worker
+        let worker = currentWorker
         // The watchdog is armed here, not on the queue: a queue already stuck never runs the start.
         let work = beginWork(for: started, on: worker)
         worker.queue.async { worker.start(wanted: wanted, generation: started, work: work) }
@@ -96,7 +101,7 @@ final class AudioRecorder {
 
     func stop() -> (samples: [Float], durationSeconds: Double) {
         endCapture()
-        let worker = self.worker
+        let worker = currentWorker
         worker.queue.async { worker.stopEngine() }
         let result = lock.withLock { samples }
         return (result, Double(result.count) / Self.sampleRate)
@@ -104,7 +109,7 @@ final class AudioRecorder {
 
     func cancel() {
         endCapture()
-        let worker = self.worker
+        let worker = currentWorker
         worker.queue.async { worker.stopEngine() }
         lock.withLock { samples.removeAll() }
     }
@@ -116,7 +121,7 @@ final class AudioRecorder {
         guard isRecording else { return cancel() }
         endCapture()
         lock.withLock { samples.removeAll() }
-        let worker = self.worker
+        let worker = currentWorker
         worker.queue.async { worker.keepOpen(for: seconds) }
     }
 
@@ -135,7 +140,7 @@ final class AudioRecorder {
     private func giveUpIfStillWaiting(for work: Int, generation: Int, on worker: Worker) {
         // Work of a worker already given up on says nothing about the recording now running on the
         // new one, even if it carries the same generation: it is dropped without touching any state.
-        guard worker === self.worker, !worker.isAbandoned else { return finishWork(work) }
+        guard worker === currentWorker, !worker.isAbandoned else { return finishWork(work) }
         let wasRecording: Bool? = lock.withLock {
             guard EngineStartPolicy.givesUp(work: work, generation: generation, current: self.generation,
                                             pending: pendingWork) else { return nil }
@@ -149,9 +154,11 @@ final class AudioRecorder {
     }
 
     /// The engine reported started, but no audio has arrived since: same treatment as a stalled call.
-    private func giveUpIfSilent(generation: Int, on worker: Worker) {
-        guard worker === self.worker, !worker.isAbandoned else { return }
+    private func giveUpIfSilent(watch: Int, generation: Int, on worker: Worker) {
+        guard worker === currentWorker, !worker.isAbandoned else { return }
         let silent: Bool = lock.withLock {
+            // A later (re)start armed a newer watch: this one no longer counts.
+            guard watch == silenceWatch else { return false }
             guard EngineStartPolicy.givesUpOnSilence(generation: generation, current: self.generation,
                                                      recording: recording, audioHeard: audioHeard) else { return false }
             capturing = false
@@ -162,10 +169,15 @@ final class AudioRecorder {
     }
 
     private func giveUp(on worker: Worker, notify: Bool) {
-        guard worker === self.worker else { return }
+        let replacement = Worker()
+        replacement.recorder = self
+        let replaced: Bool = lock.withLock {
+            guard worker === self.worker else { return false }
+            self.worker = replacement
+            return true
+        }
+        guard replaced else { return }
         worker.abandon()
-        self.worker = Worker()
-        self.worker.recorder = self
         if notify { onInterrupted?(.microphoneUnresponsive) }
     }
 
@@ -197,11 +209,21 @@ final class AudioRecorder {
     fileprivate func engineStarted(work: Int, generation: Int, abandoned: Bool, on worker: Worker) -> Bool {
         finishWork(work)
         guard EngineStartPolicy.acceptsEngine(abandoned: abandoned) else { return false }
-        // A running engine that delivers nothing is as good as a stalled one.
-        DispatchQueue.main.asyncAfter(deadline: .now() + EngineStartPolicy.timeout) { [weak self] in
-            self?.giveUpIfSilent(generation: generation, on: worker)
-        }
+        armSilenceWatch(generation: generation, on: worker)
         return true
+    }
+
+    /// A running engine that delivers nothing is as good as a stalled one. Armed by every successful
+    /// start and restart, so the time counts from the last one: a Bluetooth profile switch before the
+    /// first buffer, with its restart chain, does not end a recording that is about to recover.
+    fileprivate func armSilenceWatch(generation: Int, on worker: Worker) {
+        let watch: Int = lock.withLock {
+            silenceWatch += 1
+            return silenceWatch
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + EngineStartPolicy.timeout) { [weak self] in
+            self?.giveUpIfSilent(watch: watch, generation: generation, on: worker)
+        }
     }
 
     fileprivate func startFailed(work: Int, generation started: Int) {
@@ -225,13 +247,14 @@ final class AudioRecorder {
     /// Delivered only if `worker` is still the one in use and recording `posted` is still running.
     fileprivate func interrupted(_ reason: AudioInterruption, generation posted: Int, from worker: Worker) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, worker === self.worker, !worker.isAbandoned,
+            guard let self, worker === self.currentWorker, !worker.isAbandoned,
                   self.lock.withLock({ self.recording && self.generation == posted }) else { return }
             self.onInterrupted?(reason)
         }
     }
 
-    fileprivate func append(_ buffer: AVAudioPCMBuffer, at when: AVAudioTime, converter: AVAudioConverter, target: AVAudioFormat) {
+    fileprivate func append(_ buffer: AVAudioPCMBuffer, at when: AVAudioTime, converter: AVAudioConverter,
+                            target: AVAudioFormat, from worker: Worker) {
         let ratio = target.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
         guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
@@ -249,6 +272,10 @@ final class AudioRecorder {
         // While the microphone is only being kept open, nothing is recorded or shown, and a buffer that
         // began before the key went down is left out too.
         let total: Int? = lock.withLock {
+            // The worker may have been given up on, and a new recording begun, while this buffer was
+            // being converted: only the worker in use now may count as heard or deliver samples. The
+            // current worker serves only the current generation, and `audioHeard` is reset by `start()`.
+            guard worker === self.worker, !worker.isAbandoned else { return nil }
             audioHeard = true
             guard capturing, !when.isHostTimeValid || when.hostTime >= captureFrom else { return nil }
             samples.append(contentsOf: chunk)
@@ -299,7 +326,9 @@ private final class Worker {
     /// A configuration change is queued or being handled; further changes until it is done only set
     /// `changedAgain`, so a burst (a Bluetooth profile switch posts several) is handled once, not queued up.
     private var changeQueued = false   // guarded by `lock`
-    private var changedAgain = false   // guarded by `lock`
+    /// The recording that was current when the change arrived, so the follow-up handling is for it
+    /// and not for a recording that began meanwhile.
+    private var changedAgainFor: Int?   // guarded by `lock`
 
     var isAbandoned: Bool { lock.withLock { abandoned } }
 
@@ -423,15 +452,16 @@ private final class Worker {
     /// Queues one handling of a configuration change. The wait for the queue and the handling itself
     /// are watched separately: a queue stuck elsewhere is still told from the first, while a burst of
     /// changes waiting its turn behind restarts of 0.2-1 s each is not mistaken for a stall.
-    private func noteConfigurationChange(_ engine: AVAudioEngine) {
+    private func noteConfigurationChange(_ engine: AVAudioEngine, generation: Int? = nil) {
         guard !isAbandoned, let recorder else { return }
+        // Read before taking this worker's lock: the recorder's lock is never taken inside it.
+        let posted = generation ?? recorder.currentGeneration
         let alreadyQueued: Bool = lock.withLock {
-            if changeQueued { changedAgain = true }
+            if changeQueued, changedAgainFor == nil { changedAgainFor = posted }
             defer { changeQueued = true }
             return changeQueued
         }
         if alreadyQueued { return }
-        let posted = recorder.currentGeneration
         let wait = recorder.beginWork(for: posted, on: self)
         queue.async { [weak self, weak engine] in
             recorder.finishWork(wait)
@@ -439,12 +469,12 @@ private final class Worker {
             let work = recorder.beginWork(for: posted, on: self)
             defer {
                 recorder.finishWork(work)
-                let again: Bool = self.lock.withLock {
+                let again: Int? = self.lock.withLock {
                     self.changeQueued = false
-                    defer { self.changedAgain = false }
-                    return self.changedAgain
+                    defer { self.changedAgainFor = nil }
+                    return self.changedAgainFor
                 }
-                if again, let engine { self.noteConfigurationChange(engine) }
+                if let again, let engine { self.noteConfigurationChange(engine, generation: again) }
             }
             guard let engine else { return }
             self.configurationChanged(engine, posted: posted)
@@ -482,7 +512,9 @@ private final class Worker {
         do {
             try run(engine)
             // Given up on during the call: the engine that just came up is closed, not used.
-            if isAbandoned { discardEngine() }
+            guard !isAbandoned else { return discardEngine() }
+            // The silence window counts from this restart, not from the first start.
+            recorder.armSilenceWatch(generation: generation, on: self)
         } catch {
             // Given up on during the call: the recorder has moved on and been told.
             guard !isAbandoned else { return discardEngine() }
@@ -503,6 +535,7 @@ private final class Worker {
     /// (Re)attaches the tap with the input's current format and starts the engine. Throws `abandoned`
     /// instead of going on once the recorder has given up on this worker during one of the calls.
     private func run(_ engine: AVAudioEngine) throws {
+        guard !isAbandoned else { throw AudioRecorderError.abandoned }
         let input = engine.inputNode
         guard !isAbandoned else { throw AudioRecorderError.abandoned }
         input.removeTap(onBus: 0)
@@ -524,7 +557,7 @@ private final class Worker {
                 converter = AVAudioConverter(from: buffer.format, to: target)
             }
             guard let converter else { return }
-            recorder.append(buffer, at: when, converter: converter, target: target)
+            recorder.append(buffer, at: when, converter: converter, target: target, from: self)
         }
         guard !isAbandoned else {
             input.removeTap(onBus: 0)

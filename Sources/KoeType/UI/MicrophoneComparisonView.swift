@@ -47,20 +47,6 @@ struct MicrophoneComparisonView: View {
         .frame(minWidth: 560, minHeight: 420)
     }
 
-    /// The input devices, or nil when the listing has not returned within `seconds`.
-    private static func listDevices(within seconds: Double) async -> [AudioInputDevice]? {
-        await withTaskGroup(of: [AudioInputDevice]?.self) { group in
-            group.addTask { await AudioDevices.inputDevices() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
-    }
-
     private func run() {
         let transcriber = AppController.shared.transcriber
         guard transcriber.isReady else {
@@ -73,7 +59,7 @@ struct MicrophoneComparisonView: View {
         Task {
             // Listing the microphones asks the Core Audio HAL, which can stall: it runs on its own queue,
             // and the button is given back after a few seconds so the user can try again.
-            guard let listed = await Self.listDevices(within: 3) else {
+            guard let listed = await AudioDevices.inputDevices(within: 3) else {
                 message = "マイクの一覧を取得できませんでした。もう一度お試しください"
                 working = false
                 return
