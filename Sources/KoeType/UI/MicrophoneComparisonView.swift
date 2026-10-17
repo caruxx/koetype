@@ -55,15 +55,16 @@ struct MicrophoneComparisonView: View {
         }
         // Phone microphones offered through Continuity would wake the phone; leave them out.
         let devices = AudioDevices.inputs().map(\.device).filter { !$0.name.contains("iPhone") }
-        var recorders: [(device: AudioInputDevice, recorder: AudioRecorder)] = []
-        for device in devices {
-            let recorder = AudioRecorder()
-            recorder.preference = { .device(uid: device.uid) }
-            if (try? recorder.start()) != nil { recorders.append((device, recorder)) }
-        }
-        guard !recorders.isEmpty else {
+        guard !devices.isEmpty else {
             message = "録音できるマイクがありません"
             return
+        }
+        // Each microphone opens on its recorder's own queue; one that fails simply records nothing.
+        let recorders: [(device: AudioInputDevice, recorder: AudioRecorder)] = devices.map { device in
+            let recorder = AudioRecorder()
+            recorder.preference = { .device(uid: device.uid) }
+            recorder.start()
+            return (device, recorder)
         }
         working = true
         results = []
