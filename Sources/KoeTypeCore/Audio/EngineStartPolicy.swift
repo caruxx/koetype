@@ -17,9 +17,12 @@ public enum EngineStartPolicy {
         started == current && lastCompleted < started
     }
 
-    /// True when an engine whose start just finished may deliver audio. An engine the recorder gave up
-    /// on, or one made for an older recording, is stopped instead: it must never feed a newer recording.
-    public static func acceptsEngine(abandoned: Bool, started: Int, current: Int) -> Bool {
-        !abandoned && started == current
+    /// True when an engine whose start just finished is kept. Only an engine the recorder gave up on is
+    /// stopped: it must never feed a newer recording. An engine that came up for a recording that has
+    /// already ended (a short tap, or a second press before the microphone opened) is kept all the same,
+    /// so the keep-open and reuse paths get it instead of opening the microphone again; what is captured
+    /// is gated by the recorder, not by the engine.
+    public static func acceptsEngine(abandoned: Bool) -> Bool {
+        !abandoned
     }
 }

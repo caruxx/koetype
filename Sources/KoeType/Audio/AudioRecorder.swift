@@ -137,11 +137,13 @@ final class AudioRecorder {
     fileprivate var currentGeneration: Int { lock.withLock { generation } }
 
     /// The engine for recording `started` is running (or was still open). Returns false when the
-    /// recorder has moved on and the engine must not be used.
+    /// recorder gave up on its worker and the engine must not be used. The engine is kept even if a
+    /// newer recording began meanwhile: on the same serial queue that recording's start comes next and
+    /// finds it open, and the recorder's lock-guarded state decides what is captured.
     fileprivate func engineStarted(for started: Int, abandoned: Bool) -> Bool {
         lock.withLock {
             lastCompletedStart = max(lastCompletedStart, started)
-            return EngineStartPolicy.acceptsEngine(abandoned: abandoned, started: started, current: generation)
+            return EngineStartPolicy.acceptsEngine(abandoned: abandoned)
         }
     }
 
@@ -154,7 +156,11 @@ final class AudioRecorder {
             return true
         }
         guard current else { return }
-        DispatchQueue.main.async { [weak self] in self?.onInterrupted?(.microphoneUnavailable) }
+        DispatchQueue.main.async { [weak self] in
+            // A newer recording may have begun in the meantime: its state is left alone.
+            guard let self, self.lock.withLock({ self.generation == started }) else { return }
+            self.onInterrupted?(.microphoneUnavailable)
+        }
     }
 
     fileprivate func interrupted(_ reason: AudioInterruption, generation posted: Int) {
@@ -264,7 +270,8 @@ private final class Worker {
                 try run(reusableEngine())
             } catch {
                 discardEngine()
-                recorder.startFailed(for: generation)
+                // The recorder has already told the user it gave up on this worker: no second message.
+                if !isAbandoned { recorder.startFailed(for: generation) }
                 return
             }
         }
