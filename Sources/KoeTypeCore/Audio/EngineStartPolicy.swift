@@ -23,11 +23,22 @@ public enum EngineStartPolicy {
         generation == current && pending.contains(work)
     }
 
-    /// True when a recording whose engine reported started has still heard nothing from the microphone
-    /// after `timeout`: the recorder gives up on the worker. Only a recording that is still running and
-    /// still current counts; a short tap or a newer recording is not judged by this.
-    public static func givesUpOnSilence(generation: Int, current: Int, recording: Bool, audioHeard: Bool) -> Bool {
-        generation == current && recording && !audioHeard
+    /// True when a silence watch may be armed by a (re)start that just succeeded: only the worker in use,
+    /// not given up on, and only for the recording that is current. A late report from a worker already
+    /// replaced must not overwrite the watch of the recording now running.
+    public static func armsSilenceWatch(workerCurrent: Bool, abandoned: Bool, generation: Int, current: Int) -> Bool {
+        workerCurrent && !abandoned && generation == current
+    }
+
+    /// True when a recording whose engine reported (re)started has still heard nothing from the
+    /// microphone since that (re)start after `timeout`: the recorder gives up on the worker. Only a
+    /// recording that is still running and still current counts; a short tap or a newer recording is
+    /// not judged by this. While a restart chain is still at work (an attempt running or a retry waiting
+    /// its backoff) silence is expected and not judged either: a stuck attempt is bounded by its own
+    /// work watchdog, the retries are counted, and the restart that succeeds arms a fresh watch.
+    public static func givesUpOnSilence(generation: Int, current: Int, recording: Bool, audioHeard: Bool,
+                                        restartPending: Bool) -> Bool {
+        generation == current && recording && !audioHeard && !restartPending
     }
 
     /// True when an engine whose start just finished is kept. Only an engine the recorder gave up on is

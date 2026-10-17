@@ -57,11 +57,14 @@ final class AudioRecorder {
     /// Work that has neither reported back nor been given up on. Tracked one by one: numbers are handed
     /// out from several threads (main, the notification thread) and can finish out of order.
     private var pendingWork: Set<Int> = []   // guarded by `lock`
-    /// Whether any buffer has arrived since `start()`, captured or not.
+    /// Whether any buffer has arrived since the last successful (re)start, captured or not.
     private var audioHeard = false   // guarded by `lock`
     /// Numbers the silence watches, so only the latest one (armed by the last successful start or
     /// restart) may give up.
     private var silenceWatch = 0   // guarded by `lock`
+    /// Restart chains of the current recording still at work (an attempt running or a retry waiting its
+    /// backoff). Silence is not judged while this is above zero; reset by `start()`.
+    private var restartsPending = 0   // guarded by `lock`
     private var limitFired = false   // main queue only
     /// Owns the engine and its queue. Replaced from the main queue when its work stalls; read from the
     /// audio thread too, so the lock guards it.
@@ -89,6 +92,7 @@ final class AudioRecorder {
             generation += 1
             recording = true
             audioHeard = false
+            restartsPending = 0
             return generation
         }
         limitFired = false
@@ -160,7 +164,8 @@ final class AudioRecorder {
             // A later (re)start armed a newer watch: this one no longer counts.
             guard watch == silenceWatch else { return false }
             guard EngineStartPolicy.givesUpOnSilence(generation: generation, current: self.generation,
-                                                     recording: recording, audioHeard: audioHeard) else { return false }
+                                                     recording: recording, audioHeard: audioHeard,
+                                                     restartPending: restartsPending > 0) else { return false }
             capturing = false
             return true
         }
@@ -214,16 +219,31 @@ final class AudioRecorder {
     }
 
     /// A running engine that delivers nothing is as good as a stalled one. Armed by every successful
-    /// start and restart, so the time counts from the last one: a Bluetooth profile switch before the
-    /// first buffer, with its restart chain, does not end a recording that is about to recover.
+    /// start and restart of the worker in use, for the recording that is current, and "heard" is counted
+    /// from that moment: each (re)start gets its own first-buffer check. A late report from a worker
+    /// already replaced, or for an older recording, arms nothing.
     fileprivate func armSilenceWatch(generation: Int, on worker: Worker) {
-        let watch: Int = lock.withLock {
+        let watch: Int? = lock.withLock {
+            guard EngineStartPolicy.armsSilenceWatch(workerCurrent: worker === self.worker, abandoned: worker.isAbandoned,
+                                                     generation: generation, current: self.generation) else { return nil }
             silenceWatch += 1
+            audioHeard = false
             return silenceWatch
         }
+        guard let watch else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + EngineStartPolicy.timeout) { [weak self] in
             self?.giveUpIfSilent(watch: watch, generation: generation, on: worker)
         }
+    }
+
+    /// A restart chain for `generation` began (an attempt is running or a retry is waiting): silence is
+    /// expected until it ends. Every chain ends through `restartChainEnded`, whatever its outcome.
+    fileprivate func restartChainBegan(generation: Int) {
+        lock.withLock { if generation == self.generation { restartsPending += 1 } }
+    }
+
+    fileprivate func restartChainEnded(generation: Int) {
+        lock.withLock { if generation == self.generation { restartsPending = max(0, restartsPending - 1) } }
     }
 
     fileprivate func startFailed(work: Int, generation started: Int) {
@@ -457,7 +477,8 @@ private final class Worker {
         // Read before taking this worker's lock: the recorder's lock is never taken inside it.
         let posted = generation ?? recorder.currentGeneration
         let alreadyQueued: Bool = lock.withLock {
-            if changeQueued, changedAgainFor == nil { changedAgainFor = posted }
+            // The latest arrival wins: the follow-up handling is for the recording current by then.
+            if changeQueued { changedAgainFor = posted }
             defer { changeQueued = true }
             return changeQueued
         }
@@ -488,9 +509,13 @@ private final class Worker {
         guard let recorder, !isAbandoned, changed === engine, recorder.isRecording || closeLater != nil else { return }
         // A change from before the current recording matters only if it left the engine stopped.
         if posted != recorder.currentGeneration, changed.isRunning { return }
-        // The recording this handling is for is fixed before the HAL is asked, which can take long.
+        // The handling acts for the recording that is current now, which may be newer than the one the
+        // change was posted for: the HAL query is watched under that recording, so a stall in it is
+        // still given up on.
         let generation = recorder.currentGeneration
+        let query = recorder.beginWork(for: generation, on: self)
         let now = AudioDevices.inputUID(for: activePreference)
+        recorder.finishWork(query)
         // Meanwhile the recorder may have given up on this worker or moved on to a newer recording:
         // a late answer must not end that one.
         guard !isAbandoned else { return discardEngine() }
@@ -499,10 +524,15 @@ private final class Worker {
         guard change == .sameMicrophone else { return interrupt(.microphoneSwitched, generation: generation) }
         guard restarts < Self.maxRestarts else { return interrupt(.microphoneStopped, generation: generation) }
         restarts += 1
+        recorder.restartChainBegan(generation: generation)
         restart(changed, generation: generation, attemptsLeft: 4, wait: 0.15)
     }
 
+    /// One attempt of a restart chain. The chain ends on every path but the one that schedules a retry,
+    /// so the recorder's count of chains at work can never be left behind.
     private func restart(_ engine: AVAudioEngine, generation: Int, attemptsLeft: Int, wait: TimeInterval) {
+        var retryScheduled = false
+        defer { if !retryScheduled { recorder?.restartChainEnded(generation: generation) } }
         // A retry left over from an earlier recording must not touch this one.
         guard let recorder, !isAbandoned, engine === self.engine, generation == recorder.currentGeneration,
               recorder.isRecording || closeLater != nil else { return }
@@ -520,8 +550,10 @@ private final class Worker {
             guard !isAbandoned else { return discardEngine() }
             guard attemptsLeft > 1 else { return interrupt(.microphoneStopped, generation: generation) }
             // The headset may still be settling into its new profile (about a second): wait longer each time.
+            retryScheduled = true
             queue.asyncAfter(deadline: .now() + wait) { [weak self] in
-                self?.restart(engine, generation: generation, attemptsLeft: attemptsLeft - 1, wait: wait * 2)
+                guard let self else { return recorder.restartChainEnded(generation: generation) }
+                self.restart(engine, generation: generation, attemptsLeft: attemptsLeft - 1, wait: wait * 2)
             }
         }
     }

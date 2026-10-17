@@ -10,6 +10,7 @@ enum AudioDevices {
     private static let listingLock = NSLock()
     /// Callers waiting for the listing in flight; a request made while one is outstanding shares it.
     private static var listingWaiters: [@Sendable ([AudioInputDevice]) -> Void] = []   // guarded by `listingLock`
+    private static let maxListingWaiters = 8
 
     /// The input devices, listed off the caller's thread, or nil when the listing has not returned within
     /// `seconds`. While a listing is still waiting on the HAL, further requests do not pile up: they share
@@ -18,6 +19,9 @@ enum AudioDevices {
     static func inputDevices(within seconds: TimeInterval) async -> [AudioInputDevice]? {
         await Deadline.first(within: seconds) { deliver in
             let first: Bool = listingLock.withLock {
+                // While the HAL never returns, every caller times out on its own; the oldest waiters are
+                // the ones whose deadline has long passed, so the list is kept short by dropping them.
+                if listingWaiters.count >= maxListingWaiters { listingWaiters.removeFirst() }
                 listingWaiters.append(deliver)
                 return listingWaiters.count == 1
             }
