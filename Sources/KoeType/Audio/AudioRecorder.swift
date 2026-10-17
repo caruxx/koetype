@@ -3,7 +3,11 @@ import AudioToolbox
 import CoreAudio
 import KoeTypeCore
 
-enum AudioRecorderError: Error { case noInputDevice, engineFailed(Error) }
+enum AudioRecorderError: Error {
+    case noInputDevice, engineFailed(Error)
+    /// The recorder gave up on the worker while this call was in Core Audio.
+    case abandoned
+}
 
 /// Why a recording ended without the user stopping it.
 enum AudioInterruption {
@@ -50,8 +54,9 @@ final class AudioRecorder {
     private var generation = 0   // guarded by `lock`
     /// Numbers the stretches of worker work that can block, so a stalled one can be told from main.
     private var lastWork = 0   // guarded by `lock`
-    /// The highest work number that has reported back or been given up on.
-    private var lastCompletedWork = 0   // guarded by `lock`
+    /// Work that has neither reported back nor been given up on. Tracked one by one: numbers are handed
+    /// out from several threads (main, the notification thread) and can finish out of order.
+    private var pendingWork: Set<Int> = []   // guarded by `lock`
     /// Whether any buffer has arrived since `start()`, captured or not.
     private var audioHeard = false   // guarded by `lock`
     private var limitFired = false   // main queue only
@@ -130,8 +135,9 @@ final class AudioRecorder {
     private func giveUpIfStillWaiting(for work: Int, generation: Int, on worker: Worker) {
         let wasRecording: Bool? = lock.withLock {
             guard EngineStartPolicy.givesUp(work: work, generation: generation, current: self.generation,
-                                            lastCompleted: lastCompletedWork) else { return nil }
-            lastCompletedWork = max(lastCompletedWork, work)
+                                            pending: pendingWork) else { return nil }
+            // Claimed here: a failure report for the same work arriving later finds it gone.
+            pendingWork.remove(work)
             capturing = false
             return recording
         }
@@ -167,6 +173,7 @@ final class AudioRecorder {
     fileprivate func beginWork(for generation: Int, on worker: Worker) -> Int {
         let work: Int = lock.withLock {
             lastWork += 1
+            pendingWork.insert(lastWork)
             return lastWork
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + EngineStartPolicy.timeout) { [weak self] in
@@ -176,7 +183,7 @@ final class AudioRecorder {
     }
 
     fileprivate func finishWork(_ work: Int) {
-        lock.withLock { lastCompletedWork = max(lastCompletedWork, work) }
+        lock.withLock { _ = pendingWork.remove(work) }
     }
 
     /// The engine for recording `generation` is running (or was still open). Returns false when the
@@ -195,9 +202,9 @@ final class AudioRecorder {
 
     fileprivate func startFailed(work: Int, generation started: Int) {
         let current: Bool = lock.withLock {
-            // Already given up on from the main queue: the user has been told.
-            guard lastCompletedWork < work else { return false }
-            lastCompletedWork = work
+            // Whoever claims the work first wins: already given up on from the main queue means the
+            // user has been told.
+            guard pendingWork.remove(work) != nil else { return false }
             guard started == generation else { return false }
             capturing = false
             recording = false
@@ -316,10 +323,14 @@ private final class Worker {
         if discardOnStop || wanted != activePreference || AudioDevices.inputUID(for: wanted) != engineMicrophone {
             discardEngine()
         }
+        // Every call into Core Audio above and below can be the one that stalls. Once the recorder has
+        // given up on this worker, nothing more is opened: the engine is closed and that is all.
+        guard !isAbandoned else { return discardEngine() }
         activePreference = wanted
         do {
             try run(reusableEngine())
         } catch {
+            guard !isAbandoned else { return discardEngine() }
             // A kept engine can be left unusable by device changes while idle; try once with a new one.
             discardEngine()
             do {
@@ -417,7 +428,8 @@ private final class Worker {
         let now = AudioDevices.inputUID(for: activePreference)
         // Meanwhile the recorder may have given up on this worker or moved on to a newer recording:
         // a late answer must not end that one.
-        guard !isAbandoned, generation == recorder.currentGeneration else { return }
+        guard !isAbandoned else { return discardEngine() }
+        guard generation == recorder.currentGeneration else { return }
         let change = MicrophoneChange.classify(startedOn: startedOn, now: now)
         guard change == .sameMicrophone else { return interrupt(.microphoneSwitched, generation: generation) }
         guard restarts < Self.maxRestarts else { return interrupt(.microphoneStopped, generation: generation) }
@@ -434,9 +446,11 @@ private final class Worker {
         defer { recorder.finishWork(work) }
         do {
             try run(engine)
+            // Given up on during the call: the engine that just came up is closed, not used.
+            if isAbandoned { discardEngine() }
         } catch {
             // Given up on during the call: the recorder has moved on and been told.
-            guard !isAbandoned else { return }
+            guard !isAbandoned else { return discardEngine() }
             guard attemptsLeft > 1 else { return interrupt(.microphoneStopped, generation: generation) }
             // The headset may still be settling into its new profile (about a second): wait longer each time.
             queue.asyncAfter(deadline: .now() + wait) { [weak self] in
@@ -451,12 +465,15 @@ private final class Worker {
         recorder.interrupted(reason, generation: generation, from: self)
     }
 
-    /// (Re)attaches the tap with the input's current format and starts the engine.
+    /// (Re)attaches the tap with the input's current format and starts the engine. Throws `abandoned`
+    /// instead of going on once the recorder has given up on this worker during one of the calls.
     private func run(_ engine: AVAudioEngine) throws {
         let input = engine.inputNode
+        guard !isAbandoned else { throw AudioRecorderError.abandoned }
         input.removeTap(onBus: 0)
         engine.stop()
         let inputFormat = input.outputFormat(forBus: 0)
+        guard !isAbandoned else { throw AudioRecorderError.abandoned }
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioRecorderError.noInputDevice
         }
@@ -473,6 +490,10 @@ private final class Worker {
             }
             guard let converter else { return }
             recorder.append(buffer, at: when, converter: converter, target: target)
+        }
+        guard !isAbandoned else {
+            input.removeTap(onBus: 0)
+            throw AudioRecorderError.abandoned
         }
         do {
             engine.prepare()
