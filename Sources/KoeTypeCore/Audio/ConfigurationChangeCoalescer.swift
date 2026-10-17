@@ -41,26 +41,15 @@ public struct ConfigurationChangeCoalescer<Source: AnyObject> {
 
     /// The handling is over. Changes that arrived meanwhile are handled once more for `current`, the
     /// source in use now, if they came from it: one replaced meanwhile has no business being handled, and
-    /// a change of the one that replaced it is not lost. Otherwise their counts are released.
+    /// a change of the one that replaced it is not lost. Otherwise their counts are released. A follow-up
+    /// is handed over still busy, to be queued by the caller as it is: an arrival in between is folded
+    /// into the follow-up's own follow-up and cannot overwrite its generation.
     public mutating func finish(current: Source?) -> (followUp: Handling?, released: [Int]) {
-        busy = false
         defer { again = nil }
-        guard let again else { return (nil, []) }
-        guard let current, again.sources.contains(where: { $0.source === current }) else {
-            return (nil, again.counted)
+        guard let again, let current, again.sources.contains(where: { $0.source === current }) else {
+            busy = false
+            return (nil, again?.counted ?? [])
         }
         return (Handling(generation: again.generation, counted: again.counted), [])
-    }
-}
-
-/// Whether the input node's output format has to be set to the hardware's. Pointing an engine's input at
-/// a chosen microphone leaves the node's output format at what the previous device had: the input node
-/// does not convert sample rates, so a tap that follows that stale format makes the start fail with
-/// -10868 (a Bluetooth headset in its 16 kHz call profile behind a 48 kHz format).
-public enum InputFormatAlignment {
-    public static func needed(hardwareRate: Double, hardwareChannels: UInt32,
-                              outputRate: Double, outputChannels: UInt32) -> Bool {
-        guard hardwareRate > 0, hardwareChannels > 0 else { return false }
-        return hardwareRate != outputRate || hardwareChannels != outputChannels
     }
 }
