@@ -37,16 +37,46 @@ final class EngineStartPolicyTests: XCTestCase {
     }
 
     func testAStartedEngineThatStaysSilentIsGivenUp() {
-        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false))
+        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
+                                                         restartPending: false))
     }
 
     func testAStartedEngineThatDeliveredAudioIsKept() {
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: true))
+        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: true,
+                                                          restartPending: false))
     }
 
     func testSilenceIsNotJudgedAfterAShortTapOrForAnOlderRecording() {
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: false, audioHeard: false))
-        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 6, recording: true, audioHeard: false))
+        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: false, audioHeard: false,
+                                                          restartPending: false))
+        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 6, recording: true, audioHeard: false,
+                                                          restartPending: false))
+    }
+
+    func testSilenceIsNotJudgedWhileARestartChainIsStillAtWork() {
+        // A Bluetooth profile switch before the first buffer: attempts fail and back off. The watch
+        // from the first start fires while a retry is about to succeed; it must wait for the chain.
+        XCTAssertFalse(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
+                                                          restartPending: true))
+        // Once the chain is over and a restart has armed a fresh watch, silence counts again.
+        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
+                                                         restartPending: false))
+    }
+
+    func testHeardIsCountedSinceTheLastRestartNotSinceTheFirstStart() {
+        // The recorder resets `audioHeard` when it arms the watch of a successful restart, so a restart
+        // that "succeeds" and then delivers nothing is judged on what arrived after it.
+        XCTAssertTrue(EngineStartPolicy.givesUpOnSilence(generation: 5, current: 5, recording: true, audioHeard: false,
+                                                         restartPending: false))
+    }
+
+    func testOnlyTheCurrentWorkerArmsTheSilenceWatchForTheCurrentRecording() {
+        XCTAssertTrue(EngineStartPolicy.armsSilenceWatch(workerCurrent: true, abandoned: false, generation: 5, current: 5))
+        // A worker already replaced, or given up on, reports late: it must not overwrite the new watch.
+        XCTAssertFalse(EngineStartPolicy.armsSilenceWatch(workerCurrent: false, abandoned: false, generation: 5, current: 5))
+        XCTAssertFalse(EngineStartPolicy.armsSilenceWatch(workerCurrent: true, abandoned: true, generation: 5, current: 5))
+        // A restart for an older recording that finishes late arms nothing for the newer one.
+        XCTAssertFalse(EngineStartPolicy.armsSilenceWatch(workerCurrent: true, abandoned: false, generation: 5, current: 6))
     }
 
     func testAnEngineThatCameUpIsKept() {
