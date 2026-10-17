@@ -15,12 +15,15 @@ enum AudioDevices {
     /// `seconds`. While a listing is still waiting on the HAL, further requests do not pile up: they share
     /// that listing's result once it returns. Each caller's own wait is bounded all the same, so a stuck
     /// HAL fails every caller in time instead of holding them (the late result is simply dropped).
+    /// `seconds` is held to 0...3600, for the caller's wait and the waiter's alike.
     static func inputDevices(within seconds: TimeInterval) async -> [AudioInputDevice]? {
-        await Deadline.first(within: seconds) { deliver in
+        // Bounded once, so an odd value cannot overflow the conversion below, and both sides use it.
+        let seconds = seconds.isFinite ? min(max(0, seconds), 3_600) : 3_600
+        return await Deadline.first(within: seconds) { deliver in
             let now = DispatchTime.now().uptimeNanoseconds
             // A second past the caller's own deadline, so a waiter is dropped only once `Deadline` has
-            // surely answered it. Bounded, so an odd `seconds` cannot overflow the conversion.
-            let deadline = now + UInt64((min(max(0, seconds), 3_600) + 1) * 1_000_000_000)
+            // surely answered it.
+            let deadline = now + UInt64((seconds + 1) * 1_000_000_000)
             // While the HAL never returns, every caller times out on its own: only those whose deadline has
             // passed are dropped, so the list stays as short as the callers still waiting.
             let first = listingLock.withLock { listingWaiters.add(deliver, deadline: deadline, now: now) }

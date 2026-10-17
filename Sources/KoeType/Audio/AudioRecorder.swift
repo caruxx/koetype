@@ -342,6 +342,8 @@ private final class Worker {
     private var activePreference: MicrophonePreference = .systemDefault
     /// The microphone the kept engine was made for. A kept engine never follows a change by itself.
     private var engineMicrophone: String?
+    /// The kept engine was pointed at a chosen microphone instead of following the system default.
+    private var enginePointedAtDevice = false
     /// Set when a recording ended because the microphone switched or stopped: that engine is not kept.
     private var discardOnStop = false
     /// The microphone this recording started on, to tell a real switch from a Bluetooth profile change.
@@ -450,6 +452,7 @@ private final class Worker {
         configurationObserver = nil
         engine = nil
         engineMicrophone = nil
+        enginePointedAtDevice = false
         discardOnStop = false
     }
 
@@ -462,8 +465,8 @@ private final class Worker {
         // device is not set and the caller closes the engine.
         let deviceID = AudioDevices.deviceID(for: activePreference)
         if var deviceID, !isAbandoned, let unit = engine.inputNode.audioUnit, !isAbandoned {
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                 &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+            enginePointedAtDevice = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                                         &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr
         }
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
@@ -496,10 +499,16 @@ private final class Worker {
     /// queued or running: then it is folded into that one's follow-up.
     private func queueConfigurationChange(_ engine: AVAudioEngine, generation posted: Int, counted: [Int],
                                           recorder: AudioRecorder) {
+        guard !isAbandoned else { return counted.forEach { recorder.changeWorkEnded(generation: $0) } }
         // Taken under this worker's lock only; the recorder's lock is never taken inside it.
-        let handling = isAbandoned ? nil : lock.withLock { changes.arrive(generation: posted, counted: counted, from: engine) }
-        if isAbandoned { return counted.forEach { recorder.changeWorkEnded(generation: $0) } }
-        guard let handling else { return }
+        guard let handling = lock.withLock({ changes.arrive(generation: posted, counted: counted, from: engine) }) else { return }
+        schedule(handling, for: engine, recorder: recorder)
+    }
+
+    /// Queues `handling`, which the coalescer has marked as the one queued or running.
+    private func schedule(_ handling: ConfigurationChangeCoalescer<AVAudioEngine>.Handling, for engine: AVAudioEngine,
+                          recorder: AudioRecorder) {
+        let posted = handling.generation
         let wait = recorder.beginWork(for: posted, on: self)
         queue.async { [weak self, weak engine] in
             recorder.finishWork(wait)
@@ -520,7 +529,7 @@ private final class Worker {
         let done = lock.withLock { changes.finish(current: engine) }
         done.released.forEach { recorder.changeWorkEnded(generation: $0) }
         guard let followUp = done.followUp, let engine else { return }
-        queueConfigurationChange(engine, generation: followUp.generation, counted: followUp.counted, recorder: recorder)
+        schedule(followUp, for: engine, recorder: recorder)
     }
 
     /// A Bluetooth headset switches to its call profile once its microphone opens, which stops the
@@ -606,7 +615,9 @@ private final class Worker {
         guard !isAbandoned else { throw AudioRecorderError.abandoned }
         input.removeTap(onBus: 0)
         engine.stop()
-        alignOutputFormatWithHardware(input)
+        // Only an engine pointed at a chosen microphone is affected; one following the system default is
+        // left exactly as it was, without the extra queries.
+        if enginePointedAtDevice { alignOutputFormatWithHardware(input) }
         guard !isAbandoned else { throw AudioRecorderError.abandoned }
         let inputFormat = input.outputFormat(forBus: 0)
         guard !isAbandoned else { throw AudioRecorderError.abandoned }
@@ -655,7 +666,7 @@ private final class Worker {
         let hardware = input.inputFormat(forBus: 0)
         guard !isAbandoned else { return }
         let output = input.outputFormat(forBus: 0)
-        guard InputFormatAlignment.needed(hardwareRate: hardware.sampleRate, hardwareChannels: hardware.channelCount,
+        guard InputFormatAlignment.needed(pointedAtDevice: enginePointedAtDevice, hardwareRate: hardware.sampleRate, hardwareChannels: hardware.channelCount,
                                           outputRate: output.sampleRate, outputChannels: output.channelCount),
               !isAbandoned, let unit = input.audioUnit,
               let aligned = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate, channels: hardware.channelCount)

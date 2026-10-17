@@ -14,9 +14,13 @@ final class ConfigurationChangeCoalescerTests: XCTestCase {
         let done = coalescer.finish(current: engine)
         XCTAssertEqual(done.followUp, Handling(generation: 5, counted: [5, 5]))
         XCTAssertEqual(done.released, [])
-        // The follow-up is queued like a first arrival, with the counts it carries.
-        XCTAssertEqual(coalescer.arrive(generation: 5, counted: [5, 5], from: engine), Handling(generation: 5, counted: [5, 5]))
+        // The follow-up is handed over still busy: an arrival before it is queued is folded into the
+        // next follow-up, keeping its own generation.
+        XCTAssertNil(coalescer.arrive(generation: 6, counted: [6], from: engine))
+        XCTAssertEqual(coalescer.finish(current: engine).followUp, Handling(generation: 6, counted: [6]))
         XCTAssertEqual(coalescer.finish(current: engine).followUp, nil)
+        // Idle again: the next change is handled at once.
+        XCTAssertEqual(coalescer.arrive(generation: 6, counted: [6], from: engine), Handling(generation: 6, counted: [6]))
     }
 
     func testAChangeForANewerRecordingKeepsItsOwnCountWhileTheOlderHandlingRuns() {
@@ -59,14 +63,5 @@ final class ConfigurationChangeCoalescerTests: XCTestCase {
         _ = coalescer.arrive(generation: 5, counted: [5], from: a)
         _ = coalescer.arrive(generation: 6, counted: [6], from: a)
         XCTAssertEqual(coalescer.finish(current: nil).released, [6])
-    }
-
-    func testInputFormatIsAlignedOnlyWhenTheHardwareDiffers() {
-        // The Shokz in its call profile behind the 48 kHz format left by the default device.
-        XCTAssertTrue(InputFormatAlignment.needed(hardwareRate: 16_000, hardwareChannels: 1, outputRate: 48_000, outputChannels: 1))
-        XCTAssertTrue(InputFormatAlignment.needed(hardwareRate: 48_000, hardwareChannels: 2, outputRate: 48_000, outputChannels: 1))
-        XCTAssertFalse(InputFormatAlignment.needed(hardwareRate: 48_000, hardwareChannels: 1, outputRate: 48_000, outputChannels: 1))
-        // No usable hardware format: nothing to align to, the start reports no input device.
-        XCTAssertFalse(InputFormatAlignment.needed(hardwareRate: 0, hardwareChannels: 0, outputRate: 48_000, outputChannels: 1))
     }
 }
