@@ -3,7 +3,9 @@ import Foundation
 import KoeTypeCore
 
 /// Verification aid: measures how long the microphone takes to deliver audio after `start()`.
-/// Runs on the main actor like the app, since `AudioRecorder` handles device changes on the main queue.
+/// Runs on the main actor like the app, since `AudioRecorder` is driven from the main queue. `start()`
+/// itself returns at once; the engine comes up on the recorder's own queue, so "first audio after" is
+/// the figure that matters. A microphone that fails or does not respond is printed as an interruption.
 @MainActor
 enum MicrophoneLatency {
     static func run() async -> Int32 {
@@ -27,18 +29,13 @@ enum MicrophoneLatency {
             let began = Date()
             var firstBuffer: Date?
             recorder.onLevel = { _ in if firstBuffer == nil { firstBuffer = Date() } }
-            do {
-                if doubleTap {
-                    try recorder.start()
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    recorder.cancel(keepingMicrophoneOpenFor: 0.6)
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                }
-                try recorder.start()
-            } catch {
-                print("start failed: \(error)")
-                return 3
+            if doubleTap {
+                recorder.start()
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                recorder.cancel(keepingMicrophoneOpenFor: 0.6)
+                try? await Task.sleep(nanoseconds: 150_000_000)
             }
+            recorder.start()
             let started = Date()
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             let result = recorder.stop()

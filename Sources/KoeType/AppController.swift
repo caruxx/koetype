@@ -108,10 +108,17 @@ final class AppController: ObservableObject {
         recorder.onLevel = { [weak self] level in self?.indicator.setLevel(level) }
         recorder.onLimitReached = { [weak self] in self?.endRecordingWithoutKey() }
         recorder.onInterrupted = { [weak self] reason in
-            self?.endRecordingWithoutKey()
             switch reason {
-            case .microphoneSwitched: self?.show(message: "マイクが切り替わったため、ここまでを入力します")
-            case .microphoneStopped: self?.show(message: "マイクが止まったため、ここまでを入力します")
+            case .microphoneSwitched:
+                self?.endRecordingWithoutKey()
+                self?.show(message: "マイクが切り替わったため、ここまでを入力します")
+            case .microphoneStopped:
+                self?.endRecordingWithoutKey()
+                self?.show(message: "マイクが止まったため、ここまでを入力します")
+            case .microphoneUnavailable:
+                self?.abandonRecording(message: "マイクを開始できませんでした")
+            case .microphoneUnresponsive:
+                self?.abandonRecording(message: "マイクが応答しないため、入力を中止しました")
             }
         }
         monitor.onActiveChange = { [weak self] active in self?.hotkeyActive = active }
@@ -152,16 +159,13 @@ final class AppController: ObservableObject {
             // While the model is still loading the recording is kept and transcribed as soon as it is ready.
             guard transcriber.canAcceptAudio else { return refuse("音声認識モデルを読み込めませんでした") }
             guard Permissions.microphoneGranted else { return refuse("マイクの使用が許可されていません") }
-            do {
-                try recorder.start()
-                recordingShown = false
-                showDelayed { [weak self] in
-                    guard let self, self.recorder.isRecording else { return }
-                    self.recordingShown = true
-                    self.refreshIndicator()
-                }
-            } catch {
-                refuse("マイクを開始できませんでした")
+            // Opening the microphone happens off the main queue; a failure arrives through onInterrupted.
+            recorder.start()
+            recordingShown = false
+            showDelayed { [weak self] in
+                guard let self, self.recorder.isRecording else { return }
+                self.recordingShown = true
+                self.refreshIndicator()
             }
         case .enterHandsFree:
             delayedIndicator?.cancel()
@@ -206,6 +210,15 @@ final class AppController: ObservableObject {
     private func refuse(_ text: String) {
         machine.reset()
         showDelayed { [weak self] in self?.show(message: text) }
+    }
+
+    /// The microphone never came up for the current recording: nothing was captured, so the hotkey
+    /// state starts over (a key still held down does nothing on release) and the reason is shown.
+    private func abandonRecording(message text: String) {
+        machine.reset()
+        delayedIndicator?.cancel()
+        recordingShown = false
+        show(message: text)
     }
 
     private func showDelayed(_ show: @escaping @MainActor () -> Void) {
