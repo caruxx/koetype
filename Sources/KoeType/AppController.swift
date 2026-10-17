@@ -118,7 +118,13 @@ final class AppController: ObservableObject {
             case .microphoneUnavailable:
                 self?.abandonRecording(message: "マイクを開始できませんでした")
             case .microphoneUnresponsive:
-                self?.abandonRecording(message: "マイクが応答しないため、入力を中止しました")
+                // Stalled while opening: nothing to keep. Stalled mid-recording: keep what was said.
+                if let self, self.recorder.capturedSeconds >= 0.3 {
+                    self.endRecordingWithoutKey()
+                    self.show(message: "マイクが応答しないため、ここまでを入力します")
+                } else {
+                    self?.abandonRecording(message: "マイクが応答しないため、入力を中止しました")
+                }
             }
         }
         monitor.onActiveChange = { [weak self] active in self?.hotkeyActive = active }
@@ -215,6 +221,7 @@ final class AppController: ObservableObject {
     /// The microphone never came up for the current recording: nothing was captured, so the hotkey
     /// state starts over (a key still held down does nothing on release) and the reason is shown.
     private func abandonRecording(message text: String) {
+        recorder.cancel()
         machine.reset()
         delayedIndicator?.cancel()
         recordingShown = false
