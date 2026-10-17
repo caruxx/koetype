@@ -163,9 +163,11 @@ struct SettingsView: View {
         guard !listingDevices else { return }
         listingDevices = true
         Task {
-            let devices = await AudioDevices.inputDevices()
-            inputDevices = devices
-            inputDevicesListed = true
+            // Bounded like every listing: a stuck HAL keeps the old list and lets a later tick try again.
+            if let devices = await AudioDevices.inputDevices(within: 3) {
+                inputDevices = devices
+                inputDevicesListed = true
+            }
             listingDevices = false
         }
     }

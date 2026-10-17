@@ -9,24 +9,26 @@ enum AudioDevices {
     private static let listingQueue = DispatchQueue(label: "jp.caruvistar.koetype.audio-devices")
     private static let listingLock = NSLock()
     /// Callers waiting for the listing in flight; a request made while one is outstanding shares it.
-    private static var listingWaiters: [CheckedContinuation<[AudioInputDevice], Never>] = []   // guarded by `listingLock`
+    private static var listingWaiters: [@Sendable ([AudioInputDevice]) -> Void] = []   // guarded by `listingLock`
 
-    /// The input devices, listed off the caller's thread. While a listing is still waiting on the HAL,
-    /// further requests do not pile up: they get that listing's result once it returns.
-    static func inputDevices() async -> [AudioInputDevice] {
-        await withCheckedContinuation { continuation in
+    /// The input devices, listed off the caller's thread, or nil when the listing has not returned within
+    /// `seconds`. While a listing is still waiting on the HAL, further requests do not pile up: they share
+    /// that listing's result once it returns. Each caller's own wait is bounded all the same, so a stuck
+    /// HAL fails every caller in time instead of holding them (the late result is simply dropped).
+    static func inputDevices(within seconds: TimeInterval) async -> [AudioInputDevice]? {
+        await Deadline.first(within: seconds) { deliver in
             let first: Bool = listingLock.withLock {
-                listingWaiters.append(continuation)
+                listingWaiters.append(deliver)
                 return listingWaiters.count == 1
             }
             guard first else { return }
             listingQueue.async {
                 let devices = inputs().map(\.device)
-                let waiters: [CheckedContinuation<[AudioInputDevice], Never>] = listingLock.withLock {
+                let waiters: [@Sendable ([AudioInputDevice]) -> Void] = listingLock.withLock {
                     defer { listingWaiters.removeAll() }
                     return listingWaiters
                 }
-                for waiter in waiters { waiter.resume(returning: devices) }
+                for waiter in waiters { waiter(devices) }
             }
         }
     }
