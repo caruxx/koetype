@@ -16,17 +16,23 @@ final class EngineStartPolicyTests: XCTestCase {
         XCTAssertFalse(EngineStartPolicy.givesUp(started: 5, current: 6, lastCompleted: 4))
     }
 
-    func testAnEngineThatCameUpInTimeIsAccepted() {
-        XCTAssertTrue(EngineStartPolicy.acceptsEngine(abandoned: false, started: 3, current: 3))
+    func testAnEngineThatCameUpIsKept() {
+        XCTAssertTrue(EngineStartPolicy.acceptsEngine(abandoned: false))
     }
 
     func testAnEngineTheRecorderGaveUpOnIsNeverUsed() {
-        XCTAssertFalse(EngineStartPolicy.acceptsEngine(abandoned: true, started: 3, current: 3))
-        XCTAssertFalse(EngineStartPolicy.acceptsEngine(abandoned: true, started: 3, current: 4))
+        XCTAssertFalse(EngineStartPolicy.acceptsEngine(abandoned: true))
     }
 
-    func testAnEngineMadeForAnOlderRecordingIsNotUsedForANewerOne() {
-        XCTAssertFalse(EngineStartPolicy.acceptsEngine(abandoned: false, started: 3, current: 4))
+    func testAnEngineThatCameUpAfterAShortTapIsKeptForTheSecondPress() {
+        // The second press of a double tap bumps the generation before a cold Bluetooth engine is up.
+        // The engine still counts as started, so keep-open and the next start find it instead of
+        // opening the microphone again (another profile switch, the case that stalls the HAL), and
+        // neither recording's watchdog gives up on the worker once the start has reported back.
+        XCTAssertTrue(EngineStartPolicy.acceptsEngine(abandoned: false))
+        XCTAssertFalse(EngineStartPolicy.givesUp(started: 1, current: 2, lastCompleted: 1))
+        // The second start finds the engine open and reports back at once.
+        XCTAssertFalse(EngineStartPolicy.givesUp(started: 2, current: 2, lastCompleted: 2))
     }
 
     func testTimeoutIsAFewSeconds() {
