@@ -527,3 +527,29 @@ prepare/start/stop・removeTap・`AudioDevices` の問い合わせが、すべ�
   `remainingSeconds` 1 件を追加）。
 - 2 時間の上限の実機確認（2 時間の録音）は未実施。ファイル名の重複回避・開始中の二重開始の拒否はテストのみで、
   「記録」と「マイクを聞き比べる」の実操作は未実施。
+
+### 3 回目のレビュー指摘の修正（同日、7fc1570 に対する Codex 不合格・Opus 合格 2 件）
+
+- 停止時の合成（`AudioMixer.mix`）が `await finish(...)` の引数として `@MainActor` の `RecordingSession` 上で同期に走り、
+  2 時間分（約 1 億 1500 万サンプル）の合成でメニューとホットキーが止まっていた。合成は `Task.detached` で
+  メインアクターの外で行う。他の重い処理の点検: ファイル読み込みは既に detached、`transcribeLong`（区切り位置の探索と
+  区間のコピー）は `WhisperKitTranscriber` がメインアクターに隔離されていないためメインの外で動く。残るのは本文の整形と
+  小さなファイル書き込みのみ。
+- 開始に期限が無く、`SCShareableContent` や `startCapture()` が返らないと `starting` のまま固まり、再起動まで記録も
+  ファイル文字起こしもできなかった。開始を 10 秒（`RecordingStartDecision.timeoutSeconds`）で見切り、`idle` に戻して
+  「Mac の音の取り込みが始まりませんでした。もう一度お試しください」を出す。見切りと完了の取り合いは `FirstClaim` で
+  1 回だけ決め、見切りに負けた遅い成功は `recording` にせず取り込みを閉じる。
+- 取り込みの停止通知（`onStopped`）が `starting` の間に来ると捨てられ、死んだストリームのまま記録が続いた。
+  `starting` 中は覚えておき、開始が成功した時点で中止して `idle` に戻し「Mac の音の取り込みが止まりました」を出す。
+  判定は `RecordingStartDecision.decide`（KoeTypeCore、自動テスト 4 件）。
+- 追加指摘: 見切った後に再度開始すると、同じ `SystemAudioRecorder` に対して前回の `start()` が未完了のまま
+  もう一度 `start()` が走り、遅れて成功した前回分の後始末（`stop()`）が新しい記録の取り込みを止めてしまう。
+  見切った `start()` が返るまで `systemStartPending` を立て、その間は記録の開始を
+  「前回の開始処理がまだ終わっていません。少し待ってからお試しください」で断る（`RecordingStartDecision.mayStart`、
+  自動テスト 1 件）。これで遅い成功の後始末が閉じる取り込みを新しい記録が持つことはない。
+  ファイルの文字起こしは取り込みを使わないため、この間も可能。
+
+### 確認（3 回目）
+
+- `scripts/build.sh` 成功、`scripts/test.sh` 197 件すべて成功（前回の 192 件に `RecordingStartDecision` 5 件を追加）。
+- 10 秒の見切り・開始中の停止通知・2 時間分の合成の負荷は実機未確認（判定はテスト、処理はコンパイル確認のみ）。
