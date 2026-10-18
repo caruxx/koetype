@@ -22,7 +22,7 @@
 - UI の文言は日本語。コード内の識別子とコメントは英語。
 - API キーはキーチェーンのみに保存する。ファイル・UserDefaults・ログ・テストに書かない。テストでは `"test-key"` を使う。
 - 音声データをディスクに保存しない（`--transcribe-file` の入力ファイルを読むのは可）。
-- 既定値: Whisper モデル `openai_whisper-large-v3-v20240930_turbo_632MB`、言語 `ja`、既定ホットキー 右 Option、最短録音 0.3 秒、2 回押し判定 0.4 秒、ハンズフリー上限 600 秒、履歴上限 1,000 件、CopyBox 自動クローズ 30 秒、クリップボード復元までの待ち 0.3 秒。
+- 既定値: Whisper モデル `openai_whisper-large-v3-v20240930_turbo_632MB`、言語 `ja`、既定ホットキー 右 Command、最短録音 0.3 秒、2 回押し判定 0.4 秒、ハンズフリー上限 600 秒、履歴上限 1,000 件、CopyBox 自動クローズ 30 秒、クリップボード復元までの待ち 0.3 秒。
 - コミットメッセージは日本語で「何を・なぜ」。末尾に `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`。タスクの検証が通るたびに 1 コミットして push。
 - WhisperKit の API は `~/Library/Caches/KoeType/build/checkouts/argmax-oss-swift/Sources/WhisperKit` の実ソースと突合してから呼ぶ。本計画のコードと食い違う場合は実ソースを正とし、報告に差分を書く。
 
