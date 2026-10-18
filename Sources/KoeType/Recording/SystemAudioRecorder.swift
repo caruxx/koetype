@@ -41,8 +41,11 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stop() async -> [Float] {
-        try? await stream?.stopCapture()
-        stream = nil
+        // Only the stream this call stopped is let go: a stream started while the stop was in flight
+        // belongs to a newer recording and keeps its stop control.
+        let stopping = stream
+        try? await stopping?.stopCapture()
+        if stream === stopping { stream = nil }
         return lock.withLock { samples }
     }
 

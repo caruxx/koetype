@@ -84,9 +84,14 @@ final class RecordingSession: ObservableObject {
                 state = .idle
                 return fail("Mac の音の取り込みが始まりませんでした。もう一度お試しください")
             case .abortStreamStopped:
-                _ = await system.stop()
+                // Idle first, so a close that hangs cannot hold the starting phase; starts stay refused
+                // through `systemStartPending` until the close has returned.
                 state = .idle
-                return fail("Mac の音の取り込みが止まりました。もう一度お試しください")
+                fail("Mac の音の取り込みが止まりました。もう一度お試しください")
+                systemStartPending = true
+                _ = await system.stop()
+                systemStartPending = false
+                return
             case .record:
                 break
             }
@@ -126,14 +131,17 @@ final class RecordingSession: ObservableObject {
                     try await system.start()
                     outcome = .started
                 } catch {}
-                // Returned (one way or the other): a new start may be asked for again from here on.
-                systemStartPending = false
                 if claim.take() {
+                    // The start is the session's again: it decides what happens next.
+                    systemStartPending = false
                     continuation.resume(returning: outcome)
-                } else if outcome == .started {
-                    // Lost to the deadline: the session has moved on, so the capture is closed again.
-                    // No newer recording can own it, because starts were refused while this was pending.
-                    _ = await system.stop()
+                } else {
+                    // Lost to the deadline: the session has moved on, so a capture that did come up is
+                    // closed again. Starts stay refused until that close has fully returned, because
+                    // `stop()` suspends the main actor while the capture stops and a start allowed in
+                    // between would hand the recorder a new stream for the old stop to drop.
+                    if outcome == .started { _ = await system.stop() }
+                    systemStartPending = false
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + RecordingStartDecision.timeoutSeconds) {
