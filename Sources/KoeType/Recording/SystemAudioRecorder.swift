@@ -49,6 +49,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         return lock.withLock { samples }
     }
 
+    /// What has been captured so far, without stopping: for a stop that does not return in time.
+    var capturedSamples: [Float] { lock.withLock { samples } }
+
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, sampleBuffer.isValid else { return }
         try? sampleBuffer.withAudioBufferList { list, _ in
@@ -61,6 +64,10 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in self?.onStopped?() }
+        DispatchQueue.main.async { [weak self] in
+            // An old stream reporting its end after a newer one took over says nothing about that one.
+            guard let self, stream === self.stream else { return }
+            self.onStopped?()
+        }
     }
 }

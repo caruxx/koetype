@@ -166,12 +166,33 @@ final class RecordingSession: ObservableObject {
         limit = nil
         state = .transcribing(progress: 0)
         Task {
-            let played = await system.stop()
+            // The microphone first, so its samples are in hand whatever the Mac's sound does next.
             let spoken = microphone.isRecording ? microphone.stop().samples : []
+            let played = await closeSystemAudio()
             // Mixing two hours of audio touches over a hundred million samples: never on the main actor,
             // which this session (and so this task) runs on.
             let mixed = await Task.detached { AudioMixer.mix(played, spoken) }.value
             await finish(samples: mixed, title: "記録", startedAt: since)
+        }
+    }
+
+    /// Closes the Mac's sound, for at most `RecordingStopDecision.timeoutSeconds`. If the stop does not
+    /// return in time, what was captured so far is used instead, so the recording is transcribed and
+    /// saved either way; exactly one of the two outcomes is delivered. Starts stay refused until the
+    /// stuck stop really returns, so no new recording reuses the recorder while its stream is closing.
+    private func closeSystemAudio() async -> [Float] {
+        let claim = FirstClaim()
+        let system = self.system
+        systemStartPending = true
+        return await withCheckedContinuation { continuation in
+            Task {
+                let played = await system.stop()
+                systemStartPending = false
+                if claim.take() { continuation.resume(returning: played) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + RecordingStopDecision.timeoutSeconds) {
+                if claim.take() { continuation.resume(returning: system.capturedSamples) }
+            }
         }
     }
 
