@@ -67,7 +67,7 @@ final class RecordingSession: ObservableObject {
     func start() {
         guard state.phase.acceptsStart else { return }
         guard RecordingStartDecision.mayStart(systemStartPending: systemStartPending) else {
-            return fail("前回の開始処理がまだ終わっていません。少し待ってからお試しください")
+            return fail("前回の Mac の音の処理がまだ終わっていません。少し待ってからお試しください")
         }
         guard transcriber.isReady else { return fail("モデルを準備中です") }
         lastError = nil
@@ -89,7 +89,8 @@ final class RecordingSession: ObservableObject {
                 state = .idle
                 fail("Mac の音の取り込みが止まりました。もう一度お試しください")
                 systemStartPending = true
-                _ = await system.stop()
+                await system.stop()
+                _ = system.takeCapturedSamples()   // nothing to keep: free it
                 systemStartPending = false
                 return
             case .record:
@@ -140,7 +141,10 @@ final class RecordingSession: ObservableObject {
                     // closed again. Starts stay refused until that close has fully returned, because
                     // `stop()` suspends the main actor while the capture stops and a start allowed in
                     // between would hand the recorder a new stream for the old stop to drop.
-                    if outcome == .started { _ = await system.stop() }
+                    if outcome == .started {
+                        await system.stop()
+                        _ = system.takeCapturedSamples()   // nothing to keep: free it
+                    }
                     systemStartPending = false
                 }
             }
@@ -178,20 +182,22 @@ final class RecordingSession: ObservableObject {
 
     /// Closes the Mac's sound, for at most `RecordingStopDecision.timeoutSeconds`. If the stop does not
     /// return in time, what was captured so far is used instead, so the recording is transcribed and
-    /// saved either way; exactly one of the two outcomes is delivered. Starts stay refused until the
-    /// stuck stop really returns, so no new recording reuses the recorder while its stream is closing.
+    /// saved either way. Whichever side wins the claim is the one that takes the samples (and frees
+    /// them), so exactly one outcome is delivered and none of the audio is lost to the other side.
+    /// Starts stay refused until the stuck stop really returns, so no new recording reuses the recorder
+    /// while its stream is closing; no buffers are kept past the deadline either.
     private func closeSystemAudio() async -> [Float] {
         let claim = FirstClaim()
         let system = self.system
         systemStartPending = true
         return await withCheckedContinuation { continuation in
             Task {
-                let played = await system.stop()
+                await system.stop()
                 systemStartPending = false
-                if claim.take() { continuation.resume(returning: played) }
+                if claim.take() { continuation.resume(returning: system.takeCapturedSamples()) }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + RecordingStopDecision.timeoutSeconds) {
-                if claim.take() { continuation.resume(returning: system.capturedSamples) }
+                if claim.take() { continuation.resume(returning: system.takeCapturedSamples()) }
             }
         }
     }

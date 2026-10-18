@@ -77,9 +77,4 @@ public enum RecordingStartDecision: Equatable, Sendable {
 public enum RecordingStopDecision {
     /// How long closing the Mac's sound may take before what was captured so far is used instead.
     public static let timeoutSeconds: Double = 5
-
-    /// The samples to transcribe: the stop's own result when it returned in time, else the capture so far.
-    public static func samples(stopped: [Float]?, capturedSoFar: [Float]) -> [Float] {
-        stopped ?? capturedSoFar
-    }
 }

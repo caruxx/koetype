@@ -74,13 +74,7 @@ final class RecordingStartDecisionTests: XCTestCase {
 }
 
 final class RecordingStopDecisionTests: XCTestCase {
-    func testAStopThatReturnedInTimeIsUsed() {
-        XCTAssertEqual(RecordingStopDecision.samples(stopped: [0.1, 0.2], capturedSoFar: [0.1]), [0.1, 0.2])
-    }
-
-    func testAStopThatDidNotReturnUsesWhatWasCapturedSoFar() {
-        // Nothing is lost: the recording is transcribed and saved from the capture up to the deadline.
-        XCTAssertEqual(RecordingStopDecision.samples(stopped: nil, capturedSoFar: [0.3, 0.4, 0.5]), [0.3, 0.4, 0.5])
+    func testAStopIsGivenUpAfterAFewSeconds() {
         XCTAssertEqual(RecordingStopDecision.timeoutSeconds, 5, accuracy: 0.001)
     }
 }
