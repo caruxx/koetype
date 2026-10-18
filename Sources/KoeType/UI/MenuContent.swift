@@ -27,6 +27,8 @@ struct MenuContent: View {
         case .idle:
             Button("記録を開始（Mac の音とマイク）") { controller.recording.start() }
             Button("ファイルを文字起こし…") { chooseFile() }
+        case .starting:
+            Text("記録を開始中…")
         case .recording(let since):
             Button("記録を停止して文字起こし（\(Self.startTime(since)) 開始）") { controller.recording.stop() }
         case .transcribing(let progress):

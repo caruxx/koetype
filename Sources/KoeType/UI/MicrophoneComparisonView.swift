@@ -83,11 +83,13 @@ struct MicrophoneComparisonView: View {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 remaining -= 1
             }
+            // Every microphone is stopped first, so all of them cover the same seconds; transcribing
+            // one at a time afterwards no longer lets the later ones record on.
+            let captured = recorders.map { ($0.device, $0.recorder.stop().samples) }
             var collected: [Result] = []
-            for entry in recorders {
-                let samples = entry.recorder.stop().samples
+            for (device, samples) in captured {
                 let text = (try? await transcriber.transcribe(samples: samples, hints: "")) ?? ""
-                collected.append(Result(id: entry.device.uid, name: entry.device.name,
+                collected.append(Result(id: device.uid, name: device.name,
                                         text: HallucinationFilter.clean(text),
                                         peak: samples.map { abs($0) }.max() ?? 0))
             }
