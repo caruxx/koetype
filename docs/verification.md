@@ -409,7 +409,7 @@ prepare/start/stop・removeTap・`AudioDevices` の問い合わせが、すべ�
 
 ### 機器を指定したときの起動失敗（-10868、同日）
 
-- 現象: 設定でマイクを個別機器（例: Shokz `A0-0C-E2-8C-1B-67:input`）にすると、毎回「マイクを開始できませんでした」。
+- 現象: 設定でマイクを個別機器（例: Shokz `<Bluetooth機器のUID>:input`）にすると、毎回「マイクを開始できませんでした」。
   #6 以前の 697fc4f でも同じ（`engineFailed(... Code=-10868 ... InitializeActiveNodesInInputChain)`）で、#6 の退行ではない。
   システム既定のまま同じ Shokz を使うと成功する。
 - 原因: エンジンの入力ノードを `kAudioOutputUnitProperty_CurrentDevice` で別の機器に向けても、ノードの出力形式は
@@ -473,7 +473,7 @@ prepare/start/stop・removeTap・`AudioDevices` の問い合わせが、すべ�
   | 指定 | 結果 |
   |---|---|
   | なし（既定 = OpenComm2） | 最初の音声まで 163〜240 ms、1.40〜1.50 秒を取り込み。`--double-tap` も 1.40〜1.50 秒 |
-  | `--mic A0-0C-E2-8C-1B-67:input`（Shokz を個別指定） | 修正前は毎回 `microphoneUnavailable`・0 秒。修正後は 183〜398 ms、1.28〜1.41 秒。`--double-tap` も 1.28〜1.54 秒 |
+  | `--mic <Bluetooth機器のUID>:input`（Shokz を個別指定） | 修正前は毎回 `microphoneUnavailable`・0 秒。修正後は 183〜398 ms、1.28〜1.41 秒。`--double-tap` も 1.28〜1.54 秒 |
   | `--mic builtIn` / `--mic BuiltInMicrophoneDevice` | 175〜384 ms、1.20〜1.40 秒 |
   | `--mic` iPhone マイク 2 台（Continuity） | 1 回目は 1.5 秒以内に音声が届かず 0 秒、2 回目以降は 207〜375 ms、1.20〜1.30 秒 |
 
@@ -482,3 +482,32 @@ prepare/start/stop・removeTap・`AudioDevices` の問い合わせが、すべ�
 - 7420bf1 の再レビュー指摘の修正後: `scripts/test.sh` 183 件すべて成功（既定追従では形式を合わせないテストを追加）。
   実機（各 4 試行、割り込み通知なし）: 既定 1.20〜1.40 秒、`--double-tap` 1.40 秒、Shokz 個別指定 1.15〜1.41 秒
   （`--double-tap` も 1.28〜1.41 秒）、`--mic builtIn` 1.20〜1.40 秒、iPhone マイク 2 台は 1 回目 0 秒・2 回目以降 1.09〜1.30 秒。
+
+## main 統合前のレビュー指摘の修正（2026-10-19）
+
+### 修正
+
+- 本書に Bluetooth 機器の UID（MAC アドレスを含む）がそのまま書かれていた。`<Bluetooth機器のUID>` に置き換え、
+  リポジトリ全体（ソース・テスト・スクリプト・文書）を MAC 形式・UUID 形式の機器 ID、シリアル、個人名で検索して
+  他に無いことを確認した（設計書の個人名も「作者本人」に改めた）。git の履歴は触っていない。
+- 「記録」の文字起こしファイル名が分単位だったため、同じ分に終わった 2 回目が 1 回目を上書きしていた（音声は残らない）。
+  名前を秒単位にし、それでも同名があれば `_2`、`_3` と番号を付ける（`TranscriptFormatter.uniqueFileName`、自動テスト）。
+  書き込みも `withoutOverwriting` にして、既存ファイルを置き換えない。
+- 2 時間の上限がマイクの取り込みサンプル数だけに頼っていたため、マイクを開けず Mac の音だけで続いた場合に止まらず
+  メモリが増え続けた。録音の開始時刻からの時計で判定する上限（`RecordingLimit`、自動テスト）を `RecordingSession` に
+  加え、達したら従来の上限と同じ `stop()` で保存する。マイクの上限はそのまま残る。
+- README の「外部に送られるもの」に Codex CLI 経由（ChatGPT アカウントで OpenAI へ）を追記し、「データの保存場所」に
+  `usage.json`、`insertion.log`（アプリ名と判定結果のみ。本文は含まない）、「記録」の保存先を加えた。
+
+### 既知の制限（今回は対象外）
+
+- 入力先アプリがハングしていると、アクセシビリティの問い合わせ（`FocusInspector`、`TextInserter`）がメインスレッドを
+  止めうる。`AXUIElementSetMessagingTimeout` はアプリ要素にしか効かず、システム全体の要素に設定するとプロセス全体の
+  タイムアウトが変わるため、未対応。
+- Codex CLI 経由の整形では、指示文（文字起こし後のテキストを含む）がコマンド引数として渡るため、最長 20 秒の間
+  `ps` などで同じ Mac の他のプロセスから見える。
+
+### 確認
+
+- `scripts/build.sh` 成功、`scripts/test.sh` 成功（件数は本文末尾の実行結果を参照）。
+- 2 時間の上限の実機確認（2 時間の録音）は未実施。ファイル名の重複回避はテストのみで、「記録」の実操作は未実施。
