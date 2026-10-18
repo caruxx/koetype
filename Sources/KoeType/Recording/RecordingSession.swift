@@ -20,6 +20,9 @@ final class RecordingSession: ObservableObject {
     private let dictionary: DictionaryStore
     private let system = SystemAudioRecorder()
     private let microphone = AudioRecorder()
+    /// Ends the recording at `maxSeconds` by the clock. The microphone's own sample limit does the same,
+    /// but the microphone is optional: with the Mac's sound alone nothing else would end it.
+    private var limit: Task<Void, Never>?
 
     init(transcriber: WhisperKitTranscriber, dictionary: DictionaryStore) {
         self.transcriber = transcriber
@@ -56,12 +59,22 @@ final class RecordingSession: ObservableObject {
             // The microphone is optional: a video can be transcribed without it, so a failure to open
             // it (reported through onInterrupted, which is not set here) is ignored.
             microphone.start()
-            state = .recording(since: Date())
+            let since = Date()
+            state = .recording(since: since)
+            limit = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(Self.maxSeconds * 1_000_000_000))
+                // Only the recording this timer was set for, and only once its time is really up.
+                guard let self, !Task.isCancelled, case .recording(let started) = self.state, started == since,
+                      RecordingLimit.reached(startedAt: started, now: Date(), maxSeconds: Self.maxSeconds) else { return }
+                self.stop()
+            }
         }
     }
 
     func stop() {
         guard case .recording(let since) = state else { return }
+        limit?.cancel()
+        limit = nil
         state = .transcribing(progress: 0)
         Task {
             let played = await system.stop()
@@ -97,8 +110,14 @@ final class RecordingSession: ObservableObject {
                 title: title, startedAt: startedAt,
                 durationSeconds: Double(samples.count) / AudioRecorder.sampleRate, segments: segments)
             try FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-            let file = Self.folder.appendingPathComponent(TranscriptFormatter.fileName(title: title, startedAt: startedAt))
-            try Data(text.utf8).write(to: file, options: .atomic)
+            // A transcript never replaces an earlier one: the name is made unique, and the write itself
+            // refuses an existing file in case one appeared in between.
+            let folder = Self.folder
+            let name = TranscriptFormatter.uniqueFileName(title: title, startedAt: startedAt) { candidate in
+                FileManager.default.fileExists(atPath: folder.appendingPathComponent(candidate).path)
+            }
+            let file = folder.appendingPathComponent(name)
+            try Data(text.utf8).write(to: file, options: .withoutOverwriting)
             WindowManager.shared.showTranscript(text: text, file: file)
         } catch {
             fail("文字起こしを保存できませんでした")
