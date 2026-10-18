@@ -16,7 +16,10 @@ struct SettingsView: View {
     @State private var loginMessage = ""
     @State private var accessibilityGranted = Permissions.accessibilityGranted
     @State private var showAdvanced = false
-    @State private var inputDevices = AudioDevices.inputs().map(\.device)
+    /// Filled off the main queue: listing the microphones asks the Core Audio HAL, which can stall.
+    @State private var inputDevices: [AudioInputDevice] = []
+    @State private var inputDevicesListed = false
+    @State private var listingDevices = false
     @State private var monthlyUsage = AppController.shared.usage.month(containing: Date())
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -31,7 +34,7 @@ struct SettingsView: View {
                 Picker("マイク", selection: $settings.microphone) {
                     Text("システムの設定に従う").tag(MicrophonePreference.systemDefault)
                     Text("Mac 本体のマイク").tag(MicrophonePreference.builtIn)
-                    ForEach(inputDevices.filter { !$0.isBuiltIn }) { device in
+                    ForEach(pickerDevices) { device in
                         Text(device.name).tag(MicrophonePreference.device(uid: device.uid))
                     }
                 }
@@ -136,13 +139,36 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 380)
         .onReceive(timer) { _ in
-            inputDevices = AudioDevices.inputs().map(\.device)
+            refreshInputDevices()
             accessibilityGranted = Permissions.accessibilityGranted
             controller.refreshPermissions()
         }
+        .onAppear { refreshInputDevices() }
         .onReceive(NotificationCenter.default.publisher(for: UsageStore.didChange)
             .receive(on: DispatchQueue.main)) { _ in
             monthlyUsage = controller.usage.month(containing: Date())
+        }
+    }
+
+    /// The external microphones to offer. Until the first listing returns, a stored choice of a specific
+    /// device stands in for itself, so the picker always has a tag for the current selection.
+    private var pickerDevices: [AudioInputDevice] {
+        let listed = inputDevices.filter { !$0.isBuiltIn }
+        guard !inputDevicesListed, case .device(let uid) = settings.microphone else { return listed }
+        return listed + [AudioInputDevice(uid: uid, name: "選択中のマイク", isBuiltIn: false)]
+    }
+
+    /// One listing at a time: while the HAL keeps one waiting, the timer must not pile up more.
+    private func refreshInputDevices() {
+        guard !listingDevices else { return }
+        listingDevices = true
+        Task {
+            // Bounded like every listing: a stuck HAL keeps the old list and lets a later tick try again.
+            if let devices = await AudioDevices.inputDevices(within: 3) {
+                inputDevices = devices
+                inputDevicesListed = true
+            }
+            listingDevices = false
         }
     }
 
