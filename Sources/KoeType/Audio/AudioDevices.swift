@@ -4,6 +4,38 @@ import KoeTypeCore
 
 /// Lists the Mac's audio input devices.
 enum AudioDevices {
+    /// One serial queue for listings requested by the UI: the HAL call can stall, and it must hold
+    /// neither the main queue nor a thread of the cooperative pool while it does.
+    private static let listingQueue = DispatchQueue(label: "jp.caruvistar.koetype.audio-devices")
+    private static let listingLock = NSLock()
+    /// Callers waiting for the listing in flight; a request made while one is outstanding shares it.
+    private static var listingWaiters = SharedWaiters<@Sendable ([AudioInputDevice]) -> Void>()   // guarded by `listingLock`
+
+    /// The input devices, listed off the caller's thread, or nil when the listing has not returned within
+    /// `seconds`. While a listing is still waiting on the HAL, further requests do not pile up: they share
+    /// that listing's result once it returns. Each caller's own wait is bounded all the same, so a stuck
+    /// HAL fails every caller in time instead of holding them (the late result is simply dropped).
+    /// `seconds` is held to 0...3600, for the caller's wait and the waiter's alike.
+    static func inputDevices(within seconds: TimeInterval) async -> [AudioInputDevice]? {
+        // Bounded once, so an odd value cannot overflow the conversion below, and both sides use it.
+        let seconds = seconds.isFinite ? min(max(0, seconds), 3_600) : 3_600
+        return await Deadline.first(within: seconds) { deliver in
+            let now = DispatchTime.now().uptimeNanoseconds
+            // A second past the caller's own deadline, so a waiter is dropped only once `Deadline` has
+            // surely answered it.
+            let deadline = now + UInt64((seconds + 1) * 1_000_000_000)
+            // While the HAL never returns, every caller times out on its own: only those whose deadline has
+            // passed are dropped, so the list stays as short as the callers still waiting.
+            let first = listingLock.withLock { listingWaiters.add(deliver, deadline: deadline, now: now) }
+            guard first else { return }
+            listingQueue.async {
+                let devices = inputs().map(\.device)
+                let waiters = listingLock.withLock { listingWaiters.takeAll() }
+                for waiter in waiters { waiter(devices) }
+            }
+        }
+    }
+
     static func inputs() -> [(device: AudioInputDevice, id: AudioDeviceID)] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                                  mScope: kAudioObjectPropertyScopeGlobal,

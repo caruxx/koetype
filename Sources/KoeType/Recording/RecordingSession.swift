@@ -53,8 +53,9 @@ final class RecordingSession: ObservableObject {
             } catch {
                 return fail("Mac の音を取り込めませんでした。システム設定の「画面収録とシステムオーディオ録音」で KoeType を許可してください。")
             }
-            // The microphone is optional: a video can be transcribed without it.
-            try? microphone.start()
+            // The microphone is optional: a video can be transcribed without it, so a failure to open
+            // it (reported through onInterrupted, which is not set here) is ignored.
+            microphone.start()
             state = .recording(since: Date())
         }
     }
