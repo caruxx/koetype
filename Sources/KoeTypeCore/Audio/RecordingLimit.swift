@@ -71,3 +71,15 @@ public enum RecordingStartDecision: Equatable, Sendable {
         }
     }
 }
+
+/// How a stop of the Mac's sound that does not return is handled: the recording goes on to be
+/// transcribed and saved with what was captured, rather than waiting for good.
+public enum RecordingStopDecision {
+    /// How long closing the Mac's sound may take before what was captured so far is used instead.
+    public static let timeoutSeconds: Double = 5
+
+    /// The samples to transcribe: the stop's own result when it returned in time, else the capture so far.
+    public static func samples(stopped: [Float]?, capturedSoFar: [Float]) -> [Float] {
+        stopped ?? capturedSoFar
+    }
+}
