@@ -43,3 +43,32 @@ final class RecordingSessionPhaseTests: XCTestCase {
         XCTAssertFalse(RecordingSessionPhase.starting.endsWithTranscription)
     }
 }
+
+final class RecordingStartDecisionTests: XCTestCase {
+    func testACaptureThatCameUpStartsTheRecording() {
+        XCTAssertEqual(RecordingStartDecision.decide(outcome: .started, streamStoppedWhileStarting: false), .record)
+    }
+
+    func testACaptureThatFailedAborts() {
+        XCTAssertEqual(RecordingStartDecision.decide(outcome: .failed, streamStoppedWhileStarting: false), .abortNotPermitted)
+    }
+
+    func testACaptureThatNeverCameUpAbortsInsteadOfHoldingTheSession() {
+        XCTAssertEqual(RecordingStartDecision.decide(outcome: .timedOut, streamStoppedWhileStarting: false), .abortTimedOut)
+        XCTAssertEqual(RecordingStartDecision.timeoutSeconds, 10, accuracy: 0.001)
+    }
+
+    func testNoNewRecordingWhileATimedOutStartHasNotReturned() {
+        // The old open may still succeed late and close the capture; a newer recording must not be on it.
+        XCTAssertFalse(RecordingStartDecision.mayStart(systemStartPending: true))
+        XCTAssertTrue(RecordingStartDecision.mayStart(systemStartPending: false))
+    }
+
+    func testAStreamThatDiedWhileStartingIsNotRecordedOn() {
+        // `onStopped` arrived while the state was still starting: the start is aborted, not continued on
+        // a dead stream.
+        XCTAssertEqual(RecordingStartDecision.decide(outcome: .started, streamStoppedWhileStarting: true), .abortStreamStopped)
+        // A failure or timeout wins over the stream note; nothing was recording anyway.
+        XCTAssertEqual(RecordingStartDecision.decide(outcome: .timedOut, streamStoppedWhileStarting: true), .abortTimedOut)
+    }
+}

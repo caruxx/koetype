@@ -34,13 +34,20 @@ final class RecordingSession: ObservableObject {
     /// Ends the recording at `maxSeconds` by a monotonic clock. The microphone's own sample limit does
     /// the same, but the microphone is optional: with the Mac's sound alone nothing else would end it.
     private var limit: Task<Void, Never>?
+    /// The capture stream reported its end while the start was still opening it: the start is aborted
+    /// instead of recording on a dead stream.
+    private var streamStoppedWhileStarting = false
+    /// A `system.start()` that was given up on (timed out) has not returned yet. Until it has, no new
+    /// recording may begin: the one shared recorder cannot be started twice, and the late teardown of
+    /// the old start must never close a capture a newer recording owns.
+    private var systemStartPending = false
 
     init(transcriber: WhisperKitTranscriber, dictionary: DictionaryStore) {
         self.transcriber = transcriber
         self.dictionary = dictionary
         microphone.maxSeconds = Self.maxSeconds
         microphone.onLimitReached = { [weak self] in self?.stop() }
-        system.onStopped = { [weak self] in self?.stop() }
+        system.onStopped = { [weak self] in self?.systemStopped() }
     }
 
     static var folder: URL {
@@ -59,16 +66,29 @@ final class RecordingSession: ObservableObject {
 
     func start() {
         guard state.phase.acceptsStart else { return }
+        guard RecordingStartDecision.mayStart(systemStartPending: systemStartPending) else {
+            return fail("前回の開始処理がまだ終わっていません。少し待ってからお試しください")
+        }
         guard transcriber.isReady else { return fail("モデルを準備中です") }
         lastError = nil
         // Held from here on: a second start or a file job asked for while the sources open is refused.
         state = .starting
+        streamStoppedWhileStarting = false
         Task {
-            do {
-                try await system.start()
-            } catch {
+            let outcome = await openSystemAudio()
+            switch RecordingStartDecision.decide(outcome: outcome, streamStoppedWhileStarting: streamStoppedWhileStarting) {
+            case .abortNotPermitted:
                 state = .idle
                 return fail("Mac の音を取り込めませんでした。システム設定の「画面収録とシステムオーディオ録音」で KoeType を許可してください。")
+            case .abortTimedOut:
+                state = .idle
+                return fail("Mac の音の取り込みが始まりませんでした。もう一度お試しください")
+            case .abortStreamStopped:
+                _ = await system.stop()
+                state = .idle
+                return fail("Mac の音の取り込みが止まりました。もう一度お試しください")
+            case .record:
+                break
             }
             // The microphone is optional: a video can be transcribed without it, so a failure to open
             // it (reported through onInterrupted, which is not set here) is ignored.
@@ -92,6 +112,46 @@ final class RecordingSession: ObservableObject {
         }
     }
 
+    /// Opens the Mac's sound, for at most `RecordingStartDecision.timeoutSeconds`. ScreenCaptureKit can
+    /// stay silent for good; then the start is given up and a success that comes later is torn down
+    /// rather than used, so the session never sits in its starting phase forever.
+    private func openSystemAudio() async -> RecordingStartDecision.Outcome {
+        let claim = FirstClaim()
+        let system = self.system
+        systemStartPending = true
+        return await withCheckedContinuation { continuation in
+            Task {
+                var outcome = RecordingStartDecision.Outcome.failed
+                do {
+                    try await system.start()
+                    outcome = .started
+                } catch {}
+                // Returned (one way or the other): a new start may be asked for again from here on.
+                systemStartPending = false
+                if claim.take() {
+                    continuation.resume(returning: outcome)
+                } else if outcome == .started {
+                    // Lost to the deadline: the session has moved on, so the capture is closed again.
+                    // No newer recording can own it, because starts were refused while this was pending.
+                    _ = await system.stop()
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + RecordingStartDecision.timeoutSeconds) {
+                if claim.take() { continuation.resume(returning: .timedOut) }
+            }
+        }
+    }
+
+    /// The capture stream ended by itself. While recording that ends the recording; while still starting
+    /// it is remembered, so the start is aborted as soon as it would otherwise begin recording.
+    private func systemStopped() {
+        if case .starting = state {
+            streamStoppedWhileStarting = true
+        } else {
+            stop()
+        }
+    }
+
     func stop() {
         guard state.phase.acceptsStop, case .recording(let since) = state else { return }
         limit?.cancel()
@@ -100,7 +160,10 @@ final class RecordingSession: ObservableObject {
         Task {
             let played = await system.stop()
             let spoken = microphone.isRecording ? microphone.stop().samples : []
-            await finish(samples: AudioMixer.mix(played, spoken), title: "記録", startedAt: since)
+            // Mixing two hours of audio touches over a hundred million samples: never on the main actor,
+            // which this session (and so this task) runs on.
+            let mixed = await Task.detached { AudioMixer.mix(played, spoken) }.value
+            await finish(samples: mixed, title: "記録", startedAt: since)
         }
     }
 
@@ -120,6 +183,8 @@ final class RecordingSession: ObservableObject {
         }
     }
 
+    /// `samples` are only handed on from here: the transcriber chunks and copies them off the main actor
+    /// (it is not isolated to it), and what is left on main is the transcript text and a small file.
     private func finish(samples: [Float], title: String, startedAt: Date) async {
         defer { endTranscription() }
         guard !samples.isEmpty else { return fail("音声が記録されていませんでした") }
