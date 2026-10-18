@@ -64,13 +64,26 @@ public enum TranscriptFormatter {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Sortable name down to the second, so two recordings started in the same minute differ.
     public static func fileName(title: String, startedAt: Date, timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
-        formatter.dateFormat = "yyyy-MM-dd_HHmm"
+        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
         let safe = String(title.map { "/:\\".contains($0) ? "-" : $0 })
         return "\(formatter.string(from: startedAt))_\(safe).md"
+    }
+
+    /// `fileName` made unique among the names `exists` knows: a numbered suffix (`_2`, `_3`, ...) is
+    /// added while the name is taken, so a transcript never replaces an earlier one.
+    public static func uniqueFileName(title: String, startedAt: Date, timeZone: TimeZone = .current,
+                                      exists: (String) -> Bool) -> String {
+        let base = fileName(title: title, startedAt: startedAt, timeZone: timeZone)
+        guard exists(base) else { return base }
+        let stem = String(base.dropLast(3))
+        var number = 2
+        while exists("\(stem)_\(number).md") { number += 1 }
+        return "\(stem)_\(number).md"
     }
 
     static func clock(_ seconds: Double) -> String {

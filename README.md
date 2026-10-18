@@ -87,13 +87,20 @@ KOETYPE_SIGN_IDENTITY="Apple Development: name@example.com (XXXXXXXXXX)" scripts
 | 辞書 | `~/Library/Application Support/KoeType/dictionary.json` |
 | 音声認識モデル | `~/Library/Application Support/KoeType/Models` |
 | API キー | キーチェーン（サービス名 `jp.caruvistar.koetype`） |
+| AI 整形の利用量（トークン数と概算費用） | `~/Library/Application Support/KoeType/usage.json` |
+| 挿入の記録（入力先のアプリ名と、入力欄の種類・フォーカスの有無などの判定結果。本文は含まない） | `~/Library/Logs/KoeType/insertion.log` |
+| 「記録」の文字起こし | `~/Documents/KoeType/` |
 
 音声そのものは保存しない。
 
 ## 外部に送られるもの
 
 既定の「ローカルのみ」では、外部への送信は行わない（音声認識モデルの初回ダウンロードを除く）。
-「AI で高精度に整える」を選んだ場合に限り、設定した文字数以上の発話について、文字起こし後のテキストと辞書の内容を OpenAI の API に送る。音声は送らない。
+「AI で高精度に整える」を選んだ場合に限り、設定した文字数以上の発話について、文字起こし後のテキストと辞書の内容を外部に送る。音声は送らない。
+送り先は処理する場所の設定で決まる。
+
+- OpenAI API: 設定した API キーで OpenAI の API に送る。
+- Codex CLI: `codex` コマンドを通じて、ChatGPT アカウントで OpenAI に送る（文字起こし後のテキストと辞書の内容を指示文に含める）。
 
 ## 困ったとき
 

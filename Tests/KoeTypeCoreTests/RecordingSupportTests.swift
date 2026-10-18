@@ -73,9 +73,29 @@ final class TranscriptFormatterTests: XCTestCase {
         XCTAssertTrue(text.contains("（聞き取れた音声がありませんでした）"))
     }
 
-    func testFileNameIsSortableAndSafe() {
+    func testFileNameIsSortableSafeAndExactToTheSecond() {
         XCTAssertEqual(TranscriptFormatter.fileName(title: "会議/打合せ: A社", startedAt: date, timeZone: tokyo),
-                       "2026-09-21_2313_会議-打合せ- A社.md")
+                       "2026-09-21_231320_会議-打合せ- A社.md")
+    }
+
+    func testTwoRecordingsInTheSameMinuteGetDifferentNames() {
+        let first = TranscriptFormatter.fileName(title: "記録", startedAt: date, timeZone: tokyo)
+        let second = TranscriptFormatter.fileName(title: "記録", startedAt: date.addingTimeInterval(25), timeZone: tokyo)
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testAnExistingNameGetsANumberedSuffixInsteadOfBeingReused() {
+        let taken: Set<String> = ["2026-09-21_231320_記録.md"]
+        XCTAssertEqual(TranscriptFormatter.uniqueFileName(title: "記録", startedAt: date, timeZone: tokyo) { taken.contains($0) },
+                       "2026-09-21_231320_記録_2.md")
+        let takenTwice: Set<String> = ["2026-09-21_231320_記録.md", "2026-09-21_231320_記録_2.md"]
+        XCTAssertEqual(TranscriptFormatter.uniqueFileName(title: "記録", startedAt: date, timeZone: tokyo) { takenTwice.contains($0) },
+                       "2026-09-21_231320_記録_3.md")
+    }
+
+    func testAFreeNameIsUsedAsIs() {
+        XCTAssertEqual(TranscriptFormatter.uniqueFileName(title: "記録", startedAt: date, timeZone: tokyo) { _ in false },
+                       "2026-09-21_231320_記録.md")
     }
 }
 
